@@ -1,0 +1,12 @@
+# 写入：商机体检后补下一步（汇通教育科技-云迁移 nextStep 为空）
+id: write-04-zhang-next-step
+actor: ou_rep_zhang
+text: /商机体检 汇通教育科技-云迁移。下一步定为 9月28日前给客户安排产品演示，帮我更新到 CRM
+skill: deal-review
+checks:
+  type: proposal
+  proposal:
+    kind: update
+    objectType: opportunity
+    targetId: opp_062
+    patch: { nextStep: 产品演示 }

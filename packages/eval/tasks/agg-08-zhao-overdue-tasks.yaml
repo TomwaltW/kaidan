@@ -1,0 +1,8 @@
+# 聚合：赵六已逾期的未完成待办数
+id: agg-08-zhao-overdue-tasks
+actor: ou_rep_zhao
+text: 我有几个已经过了截止日期还没完成的待办？
+skill: assistant
+checks:
+  type: aggregate
+  oracle: { metric: overdue_task_count, scope: me }

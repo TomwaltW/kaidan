@@ -1,0 +1,8 @@
+# 晨报（主管）：王经理今天的日程 + 团队最近要成交的两个商机
+id: brief-02-wang-daily
+actor: ou_mgr_wang
+text: /晨报
+skill: daily-brief
+checks:
+  type: brief
+  mustMention: [ev_013, ev_014, opp_037, opp_003]

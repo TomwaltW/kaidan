@@ -1,0 +1,12 @@
+# 写入：改预计成交日期
+id: write-02-li-close-date
+actor: ou_rep_li
+text: 把南海外贸集团-仓储系统升级的预计成交日期改到 2026-10-31，客户说采购流程要走到月底
+skill: assistant
+checks:
+  type: proposal
+  proposal:
+    kind: update
+    objectType: opportunity
+    targetId: opp_003
+    patch: { expectedCloseDate: "2026-10-31" }

@@ -1,0 +1,11 @@
+# 写入：会后新建待办
+id: write-03-zhao-task
+actor: ou_rep_zhao
+text: /会后 和长风连锁零售电话沟通了 CRM集成 项目，约定 9月25日前把报价单发给对方，帮我建个待办
+skill: post-meeting
+checks:
+  type: proposal
+  proposal:
+    kind: create
+    objectType: task
+    patch: { opportunityId: opp_030, dueDate: "2026-09-25" }

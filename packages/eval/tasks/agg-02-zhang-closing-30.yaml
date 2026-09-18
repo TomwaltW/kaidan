@@ -1,0 +1,8 @@
+# 聚合：张三未来 30 天内预计成交的商机（回复需逐个提及）
+id: agg-02-zhang-closing-30
+actor: ou_rep_zhang
+text: 未来 30 天内预计成交的商机有哪些？
+skill: assistant
+checks:
+  type: aggregate
+  oracle: { metric: closing_soon_ids, scope: me, closingWithinDays: 30 }
