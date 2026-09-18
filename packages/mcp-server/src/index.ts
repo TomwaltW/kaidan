@@ -1,4 +1,16 @@
-// @kaidan/mcp-server —— T0 桩：导出名与类型冻结（spec 3.2），由 T1 替换为实现。
-import { notImplemented, type StartMcpServer } from "@kaidan/contracts";
+// @kaidan/mcp-server —— startMcpServer：以 stdio 提供 8 个工具（stdout 只允许协议消息，日志写 stderr）。
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import type { StartMcpServer } from "@kaidan/contracts";
+import { buildMcpServer } from "./server.js";
 
-export const startMcpServer: StartMcpServer = async () => notImplemented("@kaidan/mcp-server.startMcpServer");
+export { buildMcpServer, inputJsonSchema, type McpDeps } from "./server.js";
+
+export const startMcpServer: StartMcpServer = async (deps) => {
+  const server = buildMcpServer(deps);
+  await server.connect(new StdioServerTransport());
+  return {
+    async close() {
+      await server.close();
+    },
+  };
+};
