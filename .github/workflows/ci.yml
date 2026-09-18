@@ -1,0 +1,50 @@
+# 开单 Kaidan CI：Node 24 + pnpm，依次运行验收 A1–A5 与 e2e（spec 2.1 / 2.2）。
+# 全程不需要任何密钥、不联网（依赖安装除外）；飞书与模型在测试里一律为 fake。
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      TZ: Asia/Shanghai
+    steps:
+      - uses: actions/checkout@v4
+
+      # pnpm 版本取根 package.json 的 packageManager 字段
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: A1 安装依赖
+        run: pnpm install --frozen-lockfile
+
+      - name: A2 类型检查
+        run: pnpm typecheck
+
+      - name: A3 单元测试
+        run: pnpm test
+
+      - name: A4 技能包校验
+        run: pnpm lint:skills
+
+      - name: A5 评测数据集与任务校验
+        run: pnpm eval:validate
+
+      - name: e2e 验收用例（B1–B6）
+        run: pnpm test:e2e
