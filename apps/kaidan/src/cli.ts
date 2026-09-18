@@ -110,7 +110,8 @@ async function doctor(configArg: string): Promise<number> {
 async function chat(configArg: string, openId: string, scriptArg: string | undefined): Promise<number> {
   const config = await readConfig(configArg);
   const overrides: AppOverrides = {};
-  if (scriptArg) overrides.provider = createScriptedProvider(await readSteps(userPath(scriptArg)), config.llm.disclosure);
+  // 脚本回放不是模型生成：用脚本 provider 的缺省公示（脚本 scripted），不冒用配置里的模型名
+  if (scriptArg) overrides.provider = createScriptedProvider(await readSteps(userPath(scriptArg)));
   const app = await buildApp(config, overrides);
   try {
     const actor = await resolveActor(app, openId);
