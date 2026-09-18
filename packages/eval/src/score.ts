@@ -161,7 +161,8 @@ export function scoreTask(task: EvalTask, result: AgentRunResult, latencyMs: num
       break;
     }
   }
-  if (result.stoppedBy === "error") failures.push("运行出错（stoppedBy=error）");
+  // 带上 agent 的友好提示（限流 / 配置有误 / 暂时不可用），报告里才分得清是密钥与接口问题还是模型答错
+  if (result.stoppedBy === "error") failures.push(`运行出错（stoppedBy=error）：${reply.slice(0, 60)}`);
 
   return {
     id: task.id,

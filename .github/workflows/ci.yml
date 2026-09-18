@@ -48,3 +48,17 @@ jobs:
 
       - name: e2e 验收用例（B1–B6）
         run: pnpm test:e2e
+
+  # 镜像自检：deploy/Dockerfile 能构建，镜像里 doctor 能跑通（Mock 数据，不联网、不需要密钥）。
+  # 本机拉不到 Docker Hub 时，靠这一步确认 Dockerfile 本身没问题；不推送镜像。
+  image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 构建镜像（deploy/Dockerfile）
+        run: docker build -f deploy/Dockerfile -t kaidan:ci .
+
+      - name: 镜像内 doctor
+        run: docker run --rm kaidan:ci pnpm kaidan doctor --config config/demo.mock.yaml

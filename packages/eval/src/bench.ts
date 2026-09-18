@@ -31,6 +31,12 @@ if (loaded.adapter.kind !== "mock" || !loaded.adapter.mock) {
   throw new KaidanError(ErrorCode.CONFIG, "bench 需要 adapter.kind=mock（oracle 要从同一数据集计算期望值）");
 }
 const dataset = RomDataset.parse(JSON.parse(await readFile(loaded.adapter.mock.datasetPath, "utf8")));
+// bench 必须用真实模型：缺密钥时每个任务都会记成 stoppedBy=error、成功率 0%，看起来像模型很差 —— 开跑前就拦下
+const keyEnv = loaded.llm.kind === "openai_compatible" ? loaded.llm.apiKeyEnv : undefined;
+if (keyEnv && !process.env[keyEnv]) {
+  process.stderr.write(`缺少环境变量 ${keyEnv}（llm.apiKeyEnv）：bench 需要真实模型的密钥，先 export ${keyEnv}=… 再运行\n`);
+  process.exit(2);
+}
 // 评测不落盘：提案与审计用内存库；时钟固定在数据集的 now，保证期望值可复现
 const config = { ...loaded, governance: { ...loaded.governance, dbPath: ":memory:" } };
 
