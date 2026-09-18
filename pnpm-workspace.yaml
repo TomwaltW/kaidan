@@ -1,0 +1,9 @@
+packages:
+  - packages/*
+  - apps/*
+
+# pnpm 10 默认拦截依赖的安装脚本（附录 A）：只放行确实需要的包，其余显式忽略，不全局放开
+onlyBuiltDependencies:
+  - esbuild # tsx 依赖；postinstall 校验平台二进制
+ignoredBuiltDependencies:
+  - protobufjs # 飞书 SDK 依赖；postinstall 只打印版本号约定提示，不影响运行

@@ -1,0 +1,28 @@
+{
+  "name": "kaidan",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.34.5",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test",
+    "test:e2e": "vitest run --root tests/e2e",
+    "kaidan": "pnpm --filter @kaidan/app start --",
+    "lint:skills": "pnpm --filter @kaidan/skills lint",
+    "eval:validate": "pnpm --filter @kaidan/eval validate",
+    "bench": "pnpm --filter @kaidan/eval bench --"
+  },
+  "devDependencies": {
+    "@kaidan/agent": "workspace:*",
+    "@kaidan/app": "workspace:*",
+    "@kaidan/contracts": "workspace:*",
+    "@types/node": "^24",
+    "tsx": "^4.20.0",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.1"
+  }
+}
