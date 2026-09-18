@@ -1,0 +1,8 @@
+# 聚合：李四商务谈判阶段的商机数
+id: agg-04-li-negotiation-count
+actor: ou_rep_li
+text: 商务谈判阶段我有几个商机？
+skill: assistant
+checks:
+  type: aggregate
+  oracle: { metric: stage_count, scope: me, stage: negotiation }

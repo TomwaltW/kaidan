@@ -1,0 +1,12 @@
+# 写入：会后更新阶段（青禾精密机械-年度订阅 solution → negotiation）
+id: write-01-zhang-stage
+actor: ou_rep_zhang
+text: /会后 刚和青禾精密机械开完会，年度订阅项目客户确认了方案，开始谈价格和合同了
+skill: post-meeting
+checks:
+  type: proposal
+  proposal:
+    kind: update
+    objectType: opportunity
+    targetId: opp_019
+    patch: { stage: negotiation }

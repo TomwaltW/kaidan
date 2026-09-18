@@ -1,0 +1,8 @@
+# 聚合：王经理团队未来 7 天要成交的商机
+id: agg-07-wang-team-closing-7
+actor: ou_mgr_wang
+text: 团队这一周（未来 7 天）有哪些单子预计要成交？
+skill: assistant
+checks:
+  type: aggregate
+  oracle: { metric: closing_soon_ids, scope: team, closingWithinDays: 7 }

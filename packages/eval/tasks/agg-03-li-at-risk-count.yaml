@@ -1,0 +1,8 @@
+# 聚合：李四的风险商机数
+id: agg-03-li-at-risk-count
+actor: ou_rep_li
+text: 我现在一共有几个风险商机？
+skill: assistant
+checks:
+  type: aggregate
+  oracle: { metric: at_risk_count, scope: me }

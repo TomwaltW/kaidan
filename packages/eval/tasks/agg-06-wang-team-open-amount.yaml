@@ -1,0 +1,8 @@
+# 聚合：王经理团队视角的未关闭总金额
+id: agg-06-wang-team-open-amount
+actor: ou_mgr_wang
+text: 我们团队目前在跟的商机总金额是多少？
+skill: assistant
+checks:
+  type: aggregate
+  oracle: { metric: open_amount, scope: team }

@@ -1,0 +1,8 @@
+# 聚合：张三未关闭商机总金额
+id: agg-01-zhang-open-amount
+actor: ou_rep_zhang
+text: 我手上所有还没关闭的商机，总金额是多少？
+skill: assistant
+checks:
+  type: aggregate
+  oracle: { metric: open_amount, scope: me }

@@ -1,0 +1,8 @@
+# 聚合：赵六需求确认阶段的金额
+id: agg-05-zhao-qualified-amount
+actor: ou_rep_zhao
+text: 需求确认阶段的商机加起来多少钱？
+skill: assistant
+checks:
+  type: aggregate
+  oracle: { metric: stage_amount, scope: me, stage: qualified }

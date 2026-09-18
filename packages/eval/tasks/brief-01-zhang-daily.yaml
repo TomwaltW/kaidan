@@ -1,0 +1,8 @@
+# 晨报：张三今天的两场日程 + 最近要成交的商机
+id: brief-01-zhang-daily
+actor: ou_rep_zhang
+text: /晨报
+skill: daily-brief
+checks:
+  type: brief
+  mustMention: [ev_001, ev_002, opp_037]

@@ -1,0 +1,8 @@
+# 会前：李四不指定客户 → 今天下一场会议（10:00 电话会·博远连锁零售）
+id: prep-02-li-next-meeting
+actor: ou_rep_li
+text: /会前
+skill: call-prep
+checks:
+  type: brief
+  mustMention: [ev_005, acc_023]

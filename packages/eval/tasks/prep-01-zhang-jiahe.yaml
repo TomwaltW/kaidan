@@ -1,0 +1,8 @@
+# 会前：张三下午拜访嘉禾物流
+id: prep-01-zhang-jiahe
+actor: ou_rep_zhang
+text: /会前 下午去拜访嘉禾物流，帮我准备一下
+skill: call-prep
+checks:
+  type: brief
+  mustMention: [acc_001, opp_001]
