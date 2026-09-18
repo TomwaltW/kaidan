@@ -1,0 +1,39 @@
+# 试点客户配置样例：飞书机器人 + 飞书多维表格 CRM（tenant 模式）
+# 复制为 config/<客户>.yaml 后填写；密钥只放环境变量，不写进文件
+tenantId: acme
+timezone: Asia/Shanghai
+llm:
+  kind: openai_compatible
+  baseURL: https://dashscope.aliyuncs.com/compatible-mode/v1
+  model: qwen-plus
+  apiKeyEnv: KAIDAN_LLM_API_KEY
+  temperature: 0.2
+  disclosure:
+    providerName: 阿里云百炼
+    modelName: 通义千问
+    # filingNo: 填写备案号 / 上线编号
+adapter:
+  kind: bitable
+  bitable:
+    appToken: bascnXXXXXXXXXXXXXXXX # 多维表格 URL 中 /base/ 后面那一段
+    auth: tenant # MVP：应用身份 + 适配器按可见性规则 V1 过滤；P1 再支持 user（用户授权）
+    mappingPath: ./mapping.example.yaml
+feishu:
+  appIdEnv: FEISHU_APP_ID
+  appSecretEnv: FEISHU_APP_SECRET
+  domain: feishu
+governance:
+  dbPath: ../.data/acme.db
+  proposalTtlMinutes: 1440
+risk:
+  staleDays: 14
+  stuckDays: 30
+  soonDays: 7
+  requiredQualificationKeys: [pain, decision_maker, budget, timeline]
+users:
+  - { openId: ou_xxxxxxxxxxxxxxxx, displayName: 销售主管, roles: [manager] }
+  - { openId: ou_yyyyyyyyyyyyyyyy, displayName: 销售A, roles: [rep], managerOpenId: ou_xxxxxxxxxxxxxxxx, scheduled: true }
+  - { openId: ou_zzzzzzzzzzzzzzzz, displayName: 管理员, roles: [admin] }
+schedules:
+  dailyBrief: "30 8 * * 1-5"
+  weeklyReview: "0 17 * * 5"

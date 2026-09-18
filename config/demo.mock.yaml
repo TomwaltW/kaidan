@@ -1,0 +1,36 @@
+# 演示配置：Mock 适配器 + 虚构数据集（packages/eval/fixtures/crm-demo.json，由 T3 生成）
+# 本地试跑：KAIDAN_LLM_API_KEY=... pnpm kaidan chat --config config/demo.mock.yaml --as ou_rep_zhang
+tenantId: demo
+timezone: Asia/Shanghai
+llm:
+  kind: openai_compatible
+  # 任一国产已备案模型的 OpenAI 兼容接口均可：阿里云百炼 / DeepSeek / 智谱 / 火山方舟 / Kimi
+  baseURL: https://dashscope.aliyuncs.com/compatible-mode/v1
+  model: qwen-plus # 以控制台实际可用的模型 ID 为准
+  apiKeyEnv: KAIDAN_LLM_API_KEY
+  temperature: 0.2
+  disclosure:
+    providerName: 阿里云百炼
+    modelName: 通义千问
+    # filingNo: 上线前填写所用模型的备案号 / 上线编号（界面公示用）
+adapter:
+  kind: mock
+  mock:
+    datasetPath: ../packages/eval/fixtures/crm-demo.json
+governance:
+  dbPath: ../.data/demo.db
+  proposalTtlMinutes: 1440
+risk:
+  staleDays: 14
+  stuckDays: 30
+  soonDays: 7
+  requiredQualificationKeys: [pain, decision_maker, budget, timeline]
+users:
+  - { openId: ou_mgr_wang, displayName: 王经理, roles: [manager] }
+  - { openId: ou_rep_zhang, displayName: 张三, roles: [rep], managerOpenId: ou_mgr_wang, scheduled: true }
+  - { openId: ou_rep_li, displayName: 李四, roles: [rep], managerOpenId: ou_mgr_wang, scheduled: true }
+  - { openId: ou_rep_zhao, displayName: 赵六, roles: [rep], managerOpenId: ou_mgr_wang, scheduled: true }
+  - { openId: ou_admin, displayName: 管理员, roles: [admin] }
+schedules:
+  dailyBrief: "30 8 * * 1-5"
+  weeklyReview: "0 17 * * 5"

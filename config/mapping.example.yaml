@@ -1,0 +1,30 @@
+# 多维表格 → ROM 字段映射样例（与飞书官方"轻量级 CRM"模板结构接近；按客户实际表结构修改）
+# 约定：人员字段取第一个 open_id；关联字段取第一个 record_id；日期字段（毫秒时间戳）转为 Asia/Shanghai 的 ISO 时间
+# contact.fields.phone 是特殊键：适配器读取原始号码后只输出脱敏值到 phoneMasked，且不支持写入
+version: 1
+objects:
+  account:
+    tableId: tblAccountXXXXXXX
+    fields: { name: 客户名称, industry: 行业, region: 地区, tier: 客户等级, ownerId: 负责人 }
+  opportunity:
+    tableId: tblOpportunityXXX
+    fields:
+      name: 商机名称
+      accountId: 所属客户
+      stage: 阶段
+      amount: 预计金额
+      expectedCloseDate: 预计成交日期
+      probability: 赢率
+      nextStep: 下一步
+      lastActivityAt: 最近跟进时间
+      ownerId: 负责人
+    stageMap: { 初步接洽: lead, 需求确认: qualified, 方案报价: solution, 商务谈判: negotiation, 赢单: won, 输单: lost }
+  contact:
+    tableId: tblContactXXXXXXX
+    fields: { name: 姓名, accountId: 所属客户, title: 职位, phone: 手机, email: 邮箱, ownerId: 负责人 }
+  activity:
+    tableId: tblActivityXXXXXX
+    fields: { subject: 主题, summary: 跟进内容, kind: 跟进方式, occurredAt: 跟进时间, accountId: 客户, opportunityId: 商机, ownerId: 跟进人 }
+  task:
+    tableId: tblTaskXXXXXXXXXX
+    fields: { title: 待办事项, dueDate: 截止日期, status: 状态, accountId: 客户, opportunityId: 商机, ownerId: 负责人 }
