@@ -1,0 +1,11 @@
+{
+  "round": "2026-09-18",
+  "frozen": [
+    "packages/contracts/**", "tests/e2e/**", "config/**", "docs/**",
+    "CLAUDE.md", "README.md", ".claude/**", ".contracts.lock",
+    "package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml", "tsconfig.base.json",
+    ".nvmrc", ".npmrc", ".env.example", ".gitignore",
+    "packages/*/package.json", "packages/*/tsconfig.json",
+    "apps/kaidan/package.json", "apps/kaidan/tsconfig.json"
+  ]
+}
