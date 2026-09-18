@@ -1,0 +1,20 @@
+# deploy/Dockerfile 的构建忽略规则（构建上下文 = 仓库根目录）
+# 依赖在镜像里重新安装
+**/node_modules
+# 本地数据、密钥与客户配置不进镜像（配置在运行时挂载到 /app/config）
+.data
+**/*.db
+**/*.db-journal
+.env
+.env.*
+!.env.example
+# 开发与协作产物
+.git
+.github
+.claude
+.worktrees
+review
+coverage
+dist
+packages/eval/reports
+**/.DS_Store
