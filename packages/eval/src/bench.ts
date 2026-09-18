@@ -11,7 +11,12 @@ import { renderMarkdown, runBench, summarize } from "./score.js";
 
 const REPORTS_DIR = fileURLToPath(new URL("../reports", import.meta.url));
 
+// 根脚本是 `pnpm --filter @kaidan/eval bench --`，pnpm 会把 "--" 原样传进来（用户再写 `pnpm bench -- …` 时还会多一个）；
+// 先去掉开头的 "--"，否则 parseArgs 会把其后的参数全当成位置参数
+const argv = process.argv.slice(2);
+while (argv[0] === "--") argv.shift();
 const { values } = parseArgs({
+  args: argv,
   options: { config: { type: "string" }, only: { type: "string" } },
   allowPositionals: false,
 });

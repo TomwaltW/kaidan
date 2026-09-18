@@ -43,8 +43,9 @@ function required(value: string | undefined, flag: string): string {
 }
 
 async function main(argv: string[]): Promise<number> {
-  // `pnpm kaidan …` 会经过 `pnpm --filter @kaidan/app start -- …`，开头可能带一个原样传入的 "--"
-  const args = argv[0] === "--" ? argv.slice(1) : argv;
+  // `pnpm kaidan …` 会经过 `pnpm --filter @kaidan/app start -- …`，pnpm 把 "--" 原样传进来（`pnpm kaidan -- …` 时还会多一个）
+  const args = [...argv];
+  while (args[0] === "--") args.shift();
   let parsed;
   try {
     parsed = parseArgs({
