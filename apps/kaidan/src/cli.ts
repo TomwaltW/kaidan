@@ -25,7 +25,7 @@ import { buildApp } from "./app.js";
 
 const USAGE = `用法：
   pnpm kaidan doctor --config <配置文件>
-  pnpm kaidan chat   --config <配置文件> --as <openId> [--script <steps.json>]
+  pnpm kaidan chat   --config <配置文件> --as <openId> [--script <steps.json>] [--now <ISO 时间>]
   pnpm kaidan serve  --config <配置文件>
   pnpm kaidan mcp    --config <配置文件> --as <openId>`;
 
@@ -55,6 +55,7 @@ async function main(argv: string[]): Promise<number> {
         config: { type: "string" },
         as: { type: "string" },
         script: { type: "string" },
+        now: { type: "string" },
         help: { type: "boolean", short: "h" },
       },
     });
@@ -74,7 +75,7 @@ async function main(argv: string[]): Promise<number> {
     case "doctor":
       return doctor(required(values.config, "--config"));
     case "chat":
-      return chat(required(values.config, "--config"), required(values.as, "--as"), values.script);
+      return chat(required(values.config, "--config"), required(values.as, "--as"), values.script, values.now);
     case "serve":
       return serve(required(values.config, "--config"));
     case "mcp":
@@ -108,11 +109,23 @@ async function doctor(configArg: string): Promise<number> {
 
 // ---------------------------------------------------------------- chat
 
-async function chat(configArg: string, openId: string, scriptArg: string | undefined): Promise<number> {
+async function chat(
+  configArg: string,
+  openId: string,
+  scriptArg: string | undefined,
+  nowArg: string | undefined,
+): Promise<number> {
   const config = await readConfig(configArg);
   const overrides: AppOverrides = {};
   // 脚本回放不是模型生成：用脚本 provider 的缺省公示（脚本 scripted），不冒用配置里的模型名
   if (scriptArg) overrides.provider = createScriptedProvider(await readSteps(userPath(scriptArg)));
+  // 演示用：让「现在」从指定时刻开始走（Mock 数据集的 now 是 2026-09-21T09:00:00+08:00）；不给就用真实时间
+  if (nowArg) {
+    const start = Date.parse(nowArg);
+    if (Number.isNaN(start)) throw new UsageError(`--now 不是合法时间：${nowArg}（例：2026-09-21T09:00:00+08:00）`);
+    const offset = start - Date.now();
+    overrides.clock = () => new Date(Date.now() + offset);
+  }
   const app = await buildApp(config, overrides);
   try {
     const actor = await resolveActor(app, openId);
