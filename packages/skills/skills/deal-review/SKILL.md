@@ -27,8 +27,9 @@ allowed_tools: [crm_search, crm_get, crm_timeline, propose_update, propose_creat
 5. **下一步建议**：给出 1–3 个具体动作（谁、做什么、什么时候）。
 6. **提议写入**（仅在有依据时）：
    - 跟进记录里已经确认的要素 → `propose_update` 补 qualification（只写有依据的键）；
-   - 下一步为空 → `propose_update` 补 nextStep；
+   - 下一步为空，或用户在体检里直接说了下一步是什么 → `propose_update` 补 nextStep；
    - 需要跟进的动作 → `propose_create`（objectType=task，含 title、dueDate、opportunityId）。
+   用户说了"帮我更新到 CRM""把下一步改成…"这类话时，这一步是必做的：真的调用工具，拿到提案 id 再写回复。只在"下一步建议"里写一句话，不会生成任何提案，用户也没有可以点的"同意"。
 
 ## 输出格式
 
@@ -36,7 +37,7 @@ allowed_tools: [crm_search, crm_get, crm_timeline, propose_update, propose_creat
 - **四要素**：四行，格式"pain：已确认 —— 依据"
 - **风险**：列表；没有写"暂无明显风险"
 - **下一步**：编号列表
-- 生成提案时列出"字段：原值 → 新值"，末尾写"点同意后才会写入 CRM。"
+- 生成提案时列出"字段：原值 → 新值"（带提案 id），末尾写"点同意后才会写入 CRM。"；没有生成提案时不要写这句。
 
 ## 写入规则
 

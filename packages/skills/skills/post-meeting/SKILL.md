@@ -18,27 +18,29 @@ allowed_tools: [crm_search, crm_get, crm_timeline, propose_update, propose_creat
 
 1. **抽取结论**：从笔记里找出——客户是谁、达成了什么结论、客户的新要求、约定的时间点、提到的人。
 2. **找到商机**：`crm_search`（type=opportunity，text=客户名或项目关键字）。命中多条时列出候选让用户选；一条都没有时用 type=account 再搜一次。唯一命中后用 `crm_get` 读当前值。需要上下文时用 `crm_timeline`（limit=3）。
-3. **提议更新**（`propose_update`，一个商机合成一个提案）。只放有依据的字段：
+3. **调用 `propose_update` 生成提案**（一个商机合成一个提案）。这一步必做：只在回复里描述改动、不调用工具，CRM 里不会留下任何东西，用户也没有可以点的"同意"。工具会返回提案 id，写进输出。只放有依据的字段：
    - stage：客户确认方案 → negotiation；需求刚明确 → qualified；已签约 → won；明确放弃 → lost；
    - nextStep：写成"日期 + 动作"，如"9月24日前发送正式报价单"；相对日期（周三、下周）按当前日期换算；
    - expectedCloseDate：客户给出新的签约时间时才改，格式 YYYY-MM-DD；
    - qualification：笔记确认了 pain / decision_maker / budget / timeline 的，补对应键。
    `reason` 用一句话概括会议结论。
-4. **提议待办**：笔记里有明确要做的事时，用 `propose_create`（objectType=task，title、dueDate、opportunityId）。
+4. **提议待办**：笔记里有明确要做的事时，调用 `propose_create`（objectType=task，title、dueDate、opportunityId）。同样是真调用，不是在文字里写一句"已建待办"。
 5. **起草跟进消息**：一段 60–120 字、微信口吻的消息，感谢对方时间、复述达成的共识、说明下一步和时间点。
 6. 提醒用户：以上更新点同意后才会写入。
 
 ## 输出格式
 
 - **会议结论**：两三条要点
-- **待确认的更新**：商机名称；逐条"字段：原值 → 新值"
+- **待确认的更新**：商机名称（提案 id）；逐条"字段：原值 → 新值"
 - **待办**：标题 · 截止日期（没有就不写这一段）
 - **跟进消息（可直接复制）**：放在引用块里
-- 最后一行固定："以上更新已生成提案，点同意后才会写入 CRM。"
+- 真的拿到提案 id 时，最后一行固定："以上更新已生成提案，点同意后才会写入 CRM。"
+- 一个提案都没生成时（找不到商机、笔记里没有可更新的内容、工具报错），说明原因并给出下一步，**不要**写上面那句话——那会让用户以为有东西等他确认。
 
 ## 写入规则
 
 - 只能通过 `propose_update` / `propose_create` 生成提案；你没有直接写入 CRM 的能力，用户点同意后才会写入。
+- 先调用工具，再写回复。输出里出现的每个提案都必须对应一次真实的工具调用和它返回的 id；不要自己编提案 id，也不要把"打算改什么"写成已经生成的提案。
 - 只改笔记里有依据的字段，没提到的字段不要动。
 - 阶段只用 lead / qualified / solution / negotiation / won / lost。
 - 找不到对应商机时不要新建商机，先问用户是哪一个（只问这一个问题）。
