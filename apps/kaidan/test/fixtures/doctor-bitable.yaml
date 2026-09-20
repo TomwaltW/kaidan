@@ -1,0 +1,33 @@
+# doctor --online 的测试配置：adapter.kind=bitable，但只用来验证「没凭证就退出码 1」这条路径。
+# appToken 是假的，测试跑到凭证那一步就会停，永远不会发出真实请求。
+tenantId: doctortest
+timezone: Asia/Shanghai
+llm:
+  kind: openai_compatible
+  baseURL: https://dashscope.aliyuncs.com/compatible-mode/v1
+  model: qwen-plus
+  apiKeyEnv: KAIDAN_LLM_API_KEY
+  temperature: 0.2
+  disclosure:
+    providerName: 阿里云百炼
+    modelName: 通义千问
+adapter:
+  kind: bitable
+  bitable:
+    appToken: bascnFakeForTestOnly
+    auth: tenant
+    mappingPath: ../../../../config/mapping.example.yaml
+feishu:
+  appIdEnv: FEISHU_APP_ID
+  appSecretEnv: FEISHU_APP_SECRET
+  domain: feishu
+governance:
+  dbPath: ":memory:"
+  proposalTtlMinutes: 1440
+risk:
+  staleDays: 14
+  stuckDays: 30
+  soonDays: 7
+  requiredQualificationKeys: [pain, decision_maker, budget, timeline]
+users:
+  - { openId: ou_admin, displayName: 管理员, roles: [admin] }

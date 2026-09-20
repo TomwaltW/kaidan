@@ -5,6 +5,7 @@ import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { parseArgs } from "node:util";
+import { runBitableDoctor, type CheckStatus } from "@kaidan/adapters";
 import { createScriptedProvider } from "@kaidan/agent";
 import {
   ErrorCode,
@@ -24,7 +25,7 @@ import { startMcpServer } from "@kaidan/mcp-server";
 import { buildApp } from "./app.js";
 
 const USAGE = `用法：
-  pnpm kaidan doctor --config <配置文件>
+  pnpm kaidan doctor --config <配置文件> [--online]   （--online：对真实多维表格做一轮只读预检）
   pnpm kaidan chat   --config <配置文件> --as <openId> [--script <steps.json>] [--now <ISO 时间>]
   pnpm kaidan serve  --config <配置文件>
   pnpm kaidan mcp    --config <配置文件> --as <openId>`;
@@ -56,6 +57,7 @@ async function main(argv: string[]): Promise<number> {
         as: { type: "string" },
         script: { type: "string" },
         now: { type: "string" },
+        online: { type: "boolean" },
         help: { type: "boolean", short: "h" },
       },
     });
@@ -70,10 +72,11 @@ async function main(argv: string[]): Promise<number> {
   const [command, ...extra] = positionals;
   if (!command) throw new UsageError("缺少子命令");
   if (extra.length > 0) throw new UsageError(`多余的参数：${extra.join(" ")}`);
+  if (values.online && command !== "doctor") throw new UsageError(`--online 只能跟 doctor 一起用，不能跟 ${command}`);
 
   switch (command) {
     case "doctor":
-      return doctor(required(values.config, "--config"));
+      return doctor(required(values.config, "--config"), values.online ?? false);
     case "chat":
       return chat(required(values.config, "--config"), required(values.as, "--as"), values.script, values.now);
     case "serve":
@@ -87,7 +90,7 @@ async function main(argv: string[]): Promise<number> {
 
 // ---------------------------------------------------------------- doctor
 
-async function doctor(configArg: string): Promise<number> {
+async function doctor(configArg: string, online: boolean): Promise<number> {
   log(`[doctor] 读取配置：${userPath(configArg)}`);
   const config = await readConfig(configArg);
   log("[doctor] 配置有效，加载组件（不调用模型、不连飞书）…");
@@ -101,10 +104,33 @@ async function doctor(configArg: string): Promise<number> {
     out(`model: ${disclosureText(config.llm.disclosure)}`);
     out(`governance: ${config.governance.dbPath}`);
     out(`users: ${config.users.length}`);
+    // 离线部分到此为止，输出逐行不变（T0 定下的验收项）；--online 的内容一律追加在后面
+    if (!online) return 0;
+    return await doctorOnline(config);
   } finally {
     await app.close();
   }
-  return 0;
+}
+
+const STATUS_MARKS: Record<CheckStatus, string> = { ok: "✓", warn: "!", fail: "✗", skip: "-" };
+
+/** 只读真机预检：一条都不写 CRM。失败 → 退出码 1，并且每条问题都跟一句可执行的修法 */
+async function doctorOnline(config: KaidanConfig): Promise<number> {
+  out("");
+  if (config.adapter.kind !== "bitable") {
+    out(`--online 多维表格预检：当前 adapter 是 ${config.adapter.kind}，没有可联网检查的项（改用 adapter.kind=bitable 的配置再跑）`);
+    return 0;
+  }
+  log("[doctor] --online：对多维表格做只读预检（只发读请求，不写任何记录）…");
+  out(`--online 多维表格预检（只读，共 6 项）`);
+  const report = await runBitableDoctor(config);
+  for (const line of report.lines) {
+    out(`${STATUS_MARKS[line.status]} ${line.no}. ${line.title}：${line.detail}`);
+    // fail 行给的是必须照做的修法；warn 行给的是可以缓一缓的提醒，别让人以为不改就跑不起来
+    const label = line.status === "warn" ? "提醒" : "修法";
+    for (const fix of line.fixes ?? []) out(`    ${label}：${fix}`);
+  }
+  return report.ok ? 0 : 1;
 }
 
 // ---------------------------------------------------------------- chat
