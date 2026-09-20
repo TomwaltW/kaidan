@@ -129,8 +129,12 @@ export const createGovernance: CreateGovernance = (deps: GovernanceDeps) => {
   );
   const updateProposal = db.prepare(`UPDATE proposals SET status = ?, body = ? WHERE id = ?`);
   const selectProposal = db.prepare(`SELECT body FROM proposals WHERE id = ?`);
+  // expires_ms > ? ：已到期的提案不再出现在"待我确认"里（点下去只会拿到 EXPIRED）。
+  // 时间取 clock()，与 expireIfDue 的边界一致（now >= expiresAt 即为过期）。
   const selectPending = db.prepare(
-    `SELECT body FROM proposals WHERE tenant_id = ? AND actor_user_id = ? AND status = 'pending' ORDER BY seq ASC`,
+    `SELECT body FROM proposals
+      WHERE tenant_id = ? AND actor_user_id = ? AND status = 'pending' AND expires_ms > ?
+      ORDER BY seq ASC`,
   );
 
   function load(id: string): Proposal | null {
@@ -182,8 +186,9 @@ export const createGovernance: CreateGovernance = (deps: GovernanceDeps) => {
       return load(id);
     },
     async listPending(tenantId: string, actorUserId: string): Promise<Proposal[]> {
-      // 只按状态筛选：过期的状态迁移只发生在 approve/reject 的首次访问（spec 3.3）
-      const rows = selectPending.all(tenantId, actorUserId) as unknown as { body: string }[];
+      // 只读过滤，不改状态：过期的状态迁移仍只发生在 approve/reject 的首次访问（spec 3.3），
+      // 列表这里单纯按 expires_ms 把已到期的挡掉。
+      const rows = selectPending.all(tenantId, actorUserId, clock().getTime()) as unknown as { body: string }[];
       return rows.map((r) => JSON.parse(r.body) as Proposal);
     },
   };

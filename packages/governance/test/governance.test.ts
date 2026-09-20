@@ -105,7 +105,7 @@ describe("ProposalService", () => {
     expect(await gov.proposals.get("prop_nope")).toBeNull();
   });
 
-  it("listPending：只列该租户该提案人 status=pending 的提案，按创建顺序；过期提案在首次审批访问后才离开列表", async () => {
+  it("listPending：只列该租户该提案人 status=pending 的提案，按创建顺序；过期的不再列出", async () => {
     const { gov, clock } = setup();
     const a = await gov.proposals.create(updateProposal());
     const b = await gov.proposals.create(updateProposal({ targetId: "opp_2", diff: [], patch: { nextStep: "X" } }));
@@ -115,10 +115,25 @@ describe("ProposalService", () => {
 
     expect((await gov.proposals.listPending(TENANT, ZHANG.userId)).map((p) => p.id)).toEqual([a.id, shortLived.id]);
     clock.advanceMinutes(11);
-    expect((await gov.proposals.listPending(TENANT, ZHANG.userId)).map((p) => p.id)).toEqual([a.id, shortLived.id]);
+    // 过期的那条立刻离开列表（懒过期只改状态，这里只是不列出来）
+    expect((await gov.proposals.listPending(TENANT, ZHANG.userId)).map((p) => p.id)).toEqual([a.id]);
+    // 但 approve 的既有行为不变：仍是首次 EXPIRED（不是 INVALID_STATE），状态这时才迁移
+    expect((await gov.proposals.get(shortLived.id))?.status).toBe("pending");
     await expectCode(gov.approvals.approve(shortLived.id, ZHANG), ErrorCode.EXPIRED);
+    expect((await gov.proposals.get(shortLived.id))?.status).toBe("expired");
     expect((await gov.proposals.listPending(TENANT, ZHANG.userId)).map((p) => p.id)).toEqual([a.id]);
     expect(await gov.proposals.listPending("other-tenant", ZHANG.userId)).toEqual([]);
+  });
+
+  it("listPending：同一用户下 TTL 内的列出、已过期的不列出（边界：正好到期即为过期）", async () => {
+    const { gov, clock } = setup();
+    const alive = await gov.proposals.create(updateProposal({ ttlMinutes: 120 }));
+    const dead = await gov.proposals.create(updateProposal({ targetId: "opp_2", ttlMinutes: 30 }));
+
+    expect((await gov.proposals.listPending(TENANT, ZHANG.userId)).map((p) => p.id)).toEqual([alive.id, dead.id]);
+    clock.advanceMinutes(30); // 正好到 dead 的 expiresAt
+    expect((await gov.proposals.listPending(TENANT, ZHANG.userId)).map((p) => p.id)).toEqual([alive.id]);
+    expect((await gov.proposals.get(dead.id))?.status).toBe("pending"); // 列表不改状态
   });
 
   it("dbPath 为文件路径时自动创建父目录，close() 可重复调用", async () => {

@@ -129,3 +129,33 @@ docker stop kaidan-acme && docker rm kaidan-acme
 | 点「同意」没反应 | 回调是否选了长连接并添加 `card.action.trigger`；看日志「处理卡片回调失败」 |
 | 读不到 / 写不进多维表格 | 应用是否已被添加为该多维表格的协作者且有编辑权限；`appToken` 是否正确 |
 | 日志出现 `RATE_LIMITED` | 飞书频控，已自动重试 3 次（0.5s / 1s / 2s）仍失败；降低并发或错开定时任务时间 |
+
+## 7. 接入 MCP 客户端（可选）
+
+开单也能以 MCP 服务端的身份，把工具暴露给别的 MCP 客户端（stdio 传输）。客户端里的启动命令**必须**写成：
+
+```bash
+pnpm -s kaidan mcp --config <配置文件> --as <openId>
+```
+
+- `-s`（`--silent`）**不能省**。省掉之后 pnpm 会把 `> kaidan@0.0.0 …` 这样的横幅写进 **stdout**，
+  而 stdio 传输下 stdout 只允许出现 MCP 协议消息，横幅会直接把握手打断（客户端表现为连不上或解析失败）。
+  这是 pnpm 的行为，代码里修不掉，只能靠命令里的 `-s`。
+- 工作目录要是仓库根目录（或容器里的 `/app`），否则 `pnpm` 找不到 `kaidan` 这个脚本。
+- `--as <openId>` 指定以哪个销售的身份提供工具，这个 open_id 必须在配置的 `users` 里。
+- `pnpm --filter @kaidan/mcp-server start` **不是**入口：它只会往 stderr 打印上面这条指引并以退出码 2 结束。
+- 该进程的日志一律走 stderr，stdout 只有协议消息；stdin 关闭即退出。
+
+以 Claude Code 为例（`.mcp.json`）：
+
+```json
+{
+  "mcpServers": {
+    "kaidan": {
+      "command": "pnpm",
+      "args": ["-s", "kaidan", "mcp", "--config", "config/demo.mock.yaml", "--as", "ou_rep_zhang"],
+      "cwd": "<仓库根目录，容器里是 /app>"
+    }
+  }
+}
+```
