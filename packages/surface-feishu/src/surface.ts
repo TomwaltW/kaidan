@@ -1,5 +1,7 @@
 // 飞书入口（spec 3.1 surface.ts 行为规则 + 3.2 第 8 条）。
 // 三个处理器只依赖 SurfaceDeps；start() 才连飞书（长连接 + 定时任务）。
+// 本文件里的日志只为真机排错，一律写 stderr，且只记元数据（open_id / message_id / 提案 id / 错误码），
+// 不记消息正文、CRM 正文与手机号（硬规则 5、9）。
 import { randomUUID } from "node:crypto";
 import * as lark from "@larksuiteoapi/node-sdk";
 import type { Cron } from "croner";
@@ -16,17 +18,19 @@ import {
   type SurfaceDeps,
 } from "@kaidan/contracts";
 import { NOTICE_TEXT, buildNoticeCard, buildProposalCard, buildReplyCard } from "./cards.js";
+import { checkAppIdFormat, createConnectionWatch, wsStateText } from "./connection.js";
 import {
   createLarkClient,
   createSdkClient,
-  fetchBotOpenId,
+  fetchBotInfo,
   readFeishuCredentials,
   sdkImApi,
-  stderrLogger,
 } from "./lark-client.js";
+import { createLogger, createSdkLogger, describeError, type LogLevel, type Logger } from "./log.js";
 import { parseCardActionEvent, parseMessageEvent } from "./parse.js";
 import { realSleep, type Sleep } from "./retry.js";
 import { createSchedules, type ScheduleKind, type ScheduleOptions } from "./schedule.js";
+import { botFailureReason, renderStartupBanner, type BotInfo } from "./startup.js";
 
 /** 长连接收到的原始事件交给这两个回调（载荷已由 SDK 的 EventDispatcher 展平） */
 export interface FeishuEventHandlers {
@@ -36,8 +40,14 @@ export interface FeishuEventHandlers {
 
 export interface FeishuConnection {
   botOpenId: string;
+  /** 机器人名称（bot/v3/info 的 app_name），拿不到就不填 */
+  botName?: string;
+  /** botOpenId 为空时说明原因，启动自述会原样写出来 */
+  botInfoError?: string;
   /** 没有注入 client 时用它发送 */
   client: LarkClientLike;
+  /** 长连接当前状态的中文说法（真实连接用 WSClient.getConnectionStatus()） */
+  status?: () => string;
   close(): void;
 }
 
@@ -51,6 +61,8 @@ export interface FeishuSurfaceOptions {
   onSchedules?: (jobs: Cron[]) => void;
   /** 日志一律写 stderr */
   log?: (...args: unknown[]) => void;
+  /** 缺省读环境变量 KAIDAN_LOG_LEVEL，再缺省 info */
+  logLevel?: LogLevel;
 }
 
 const SCHEDULE_SKILL: Readonly<Record<ScheduleKind, { skill: SkillName; text: string }>> = {
@@ -77,12 +89,25 @@ export function approvalErrorText(e: unknown): string {
   }
 }
 
+/** 卡片回调的处理结果，只用于日志：不含任何 CRM 正文 */
+export function cardActionOutcome(e: unknown): string {
+  return isKaidanError(e) ? `错误 ${e.code}` : "错误 UNKNOWN";
+}
+
 /** 真实长连接：Client（发消息 / 取机器人信息）+ EventDispatcher + WSClient */
-async function connectFeishu(deps: SurfaceDeps, handlers: FeishuEventHandlers, sleep: Sleep): Promise<FeishuConnection> {
+async function connectFeishu(
+  deps: SurfaceDeps,
+  handlers: FeishuEventHandlers,
+  sleep: Sleep,
+  logger: Logger,
+): Promise<FeishuConnection> {
   const cred = readFeishuCredentials(deps.config);
-  const sdk = createSdkClient(cred);
-  const botOpenId = await fetchBotOpenId(sdk);
-  const dispatcher = new lark.EventDispatcher({ logger: stderrLogger }).register<{
+  checkAppIdFormat(cred.appId, logger);
+  const sdk = createSdkClient(cred, logger);
+  const bot = await fetchBotInfo(sdk, logger);
+  const watch = createConnectionWatch(logger);
+  const sdkLogger = createSdkLogger(logger);
+  const dispatcher = new lark.EventDispatcher({ logger: sdkLogger }).register<{
     "card.action.trigger": (data: unknown) => Promise<unknown>;
   }>({
     "im.message.receive_v1": (data) => handlers.onMessage(data),
@@ -92,22 +117,35 @@ async function connectFeishu(deps: SurfaceDeps, handlers: FeishuEventHandlers, s
     appId: cred.appId,
     appSecret: cred.appSecret,
     domain: cred.domain,
-    logger: stderrLogger,
+    logger: sdkLogger,
     loggerLevel: lark.LoggerLevel.info,
     autoReconnect: true,
+    onReady: watch.onReady,
+    onError: watch.onError,
+    onReconnecting: watch.onReconnecting,
+    onReconnected: watch.onReconnected,
   });
   await ws.start({ eventDispatcher: dispatcher });
-  return {
-    botOpenId,
-    client: createLarkClient(sdkImApi(sdk), { sleep }),
-    close: () => ws.close(),
+  watch.armReadyWatchdog();
+  const connection: FeishuConnection = {
+    botOpenId: bot.openId,
+    client: createLarkClient(sdkImApi(sdk), { sleep, logger }),
+    status: () => wsStateText(ws.getConnectionStatus().state),
+    close: () => {
+      watch.disarm();
+      ws.close();
+    },
   };
+  if (bot.name !== undefined) connection.botName = bot.name;
+  return connection;
 }
 
 export function buildFeishuSurface(deps: SurfaceDeps, opts: FeishuSurfaceOptions = {}): Surface {
   const { agent, governance, identity, config } = deps;
   const sleep = opts.sleep ?? realSleep;
-  const log = opts.log ?? ((...args: unknown[]) => console.error("[surface-feishu]", ...args));
+  const logger = createLogger(
+    opts.logLevel === undefined ? { sink: opts.log } : { sink: opts.log, level: opts.logLevel },
+  );
 
   let connection: FeishuConnection | undefined;
   let lazyClient: LarkClientLike | undefined;
@@ -119,7 +157,10 @@ export function buildFeishuSurface(deps: SurfaceDeps, opts: FeishuSurfaceOptions
   function client(): LarkClientLike {
     if (deps.client) return deps.client;
     if (connection) return connection.client;
-    lazyClient ??= createLarkClient(sdkImApi(createSdkClient(readFeishuCredentials(config))), { sleep });
+    lazyClient ??= createLarkClient(sdkImApi(createSdkClient(readFeishuCredentials(config), logger)), {
+      sleep,
+      logger,
+    });
     return lazyClient;
   }
 
@@ -133,7 +174,7 @@ export function buildFeishuSurface(deps: SurfaceDeps, opts: FeishuSurfaceOptions
     const actor = await identity.resolveByOpenId(msg.senderOpenId);
     if (!actor) {
       // 方便管理员把新用户加进 config.users（只记 open_id，不记消息正文）
-      log(`未开通用户发来消息：open_id=${msg.senderOpenId}`);
+      logger.info(`未开通用户发来消息：open_id=${msg.senderOpenId}`);
       await send(to, buildNoticeCard(NOTICE_TEXT.notEnabled));
       return;
     }
@@ -141,29 +182,37 @@ export function buildFeishuSurface(deps: SurfaceDeps, opts: FeishuSurfaceOptions
     try {
       result = await agent.run({ actor, text: msg.text, traceId: `fs_${msg.messageId}`, channel: "feishu" });
     } catch (e) {
-      log("agent.run 失败", msg.messageId, e);
+      logger.error("agent.run 失败", msg.messageId, e);
       await send(to, buildNoticeCard(NOTICE_TEXT.agentFailed));
       return;
     }
     // stoppedBy="error" 时正文是系统提示（例如「模型服务配置有误…」）、并非模型生成 → 不加公示页脚（CLI 同此规则）
     await send(to, buildReplyCard(result.reply, result.disclosure, { showDisclosure: result.stoppedBy !== "error" }));
     for (const p of result.proposals) await send(to, buildProposalCard(p, config.timezone));
+    logger.debug(
+      `消息处理完成：message_id=${msg.messageId} 技能=${result.skill} 提案=${result.proposals.length} 结束于=${result.stoppedBy}`,
+    );
   }
 
-  async function handleCardAction(a: CardAction): Promise<OutboundCard> {
+  /** handleCardAction 的实现；额外返回一句只含元数据的处理结果，供回调链路的日志用 */
+  async function decideCardAction(a: CardAction): Promise<{ card: OutboundCard; outcome: string }> {
     const operator = await identity.resolveByOpenId(a.operatorOpenId);
-    if (!operator) return buildNoticeCard(NOTICE_TEXT.notEnabled);
+    if (!operator) return { card: buildNoticeCard(NOTICE_TEXT.notEnabled), outcome: "未开通用户" };
     try {
       if (a.action === "approve") {
         await governance.approvals.approve(a.proposalId, operator);
-        return buildNoticeCard(NOTICE_TEXT.approved);
+        return { card: buildNoticeCard(NOTICE_TEXT.approved), outcome: "committed" };
       }
       await governance.approvals.reject(a.proposalId, operator);
-      return buildNoticeCard(NOTICE_TEXT.rejected);
+      return { card: buildNoticeCard(NOTICE_TEXT.rejected), outcome: "rejected" };
     } catch (e) {
-      if (!isKaidanError(e)) log("审批失败", a.proposalId, e);
-      return buildNoticeCard(approvalErrorText(e));
+      if (!isKaidanError(e)) logger.error("审批失败", a.proposalId, e);
+      return { card: buildNoticeCard(approvalErrorText(e)), outcome: cardActionOutcome(e) };
     }
+  }
+
+  async function handleCardAction(a: CardAction): Promise<OutboundCard> {
+    return (await decideCardAction(a)).card;
   }
 
   async function runScheduled(kind: ScheduleKind): Promise<{ sent: number; failed: number }> {
@@ -181,7 +230,7 @@ export function buildFeishuSurface(deps: SurfaceDeps, opts: FeishuSurfaceOptions
           traceId: `sched_${kind}_${actor.userId}_${randomUUID()}`,
         });
         if (r.stoppedBy === "error" || r.stoppedBy === "forbidden") {
-          log(`定时任务 ${kind} 未生成内容`, actor.userId, r.stoppedBy);
+          logger.warn(`定时任务 ${kind} 未生成内容`, actor.userId, r.stoppedBy);
           failed++;
           continue;
         }
@@ -190,35 +239,67 @@ export function buildFeishuSurface(deps: SurfaceDeps, opts: FeishuSurfaceOptions
         for (const p of r.proposals) await send(to, buildProposalCard(p, config.timezone));
         sent++;
       } catch (e) {
-        log(`定时任务 ${kind} 发送失败`, actor.userId, e);
+        logger.error(`定时任务 ${kind} 发送失败`, actor.userId, e);
         failed++;
       }
     }
+    logger.info(`定时任务 ${kind} 完成：送达 ${sent} 人，失败 ${failed} 人`);
     return { sent, failed };
   }
 
   const handlers: FeishuEventHandlers = {
     async onMessage(data) {
       const msg = parseMessageEvent(data, connection?.botOpenId);
-      if (!msg) return;
-      if (seen.has(msg.messageId)) return;
+      if (!msg) {
+        logger.debug("im.message.receive_v1：不是用户发来的文本消息，已忽略");
+        return;
+      }
+      if (seen.has(msg.messageId)) {
+        logger.debug(`im.message.receive_v1：重复投递，已忽略 message_id=${msg.messageId}`);
+        return;
+      }
       seen.add(msg.messageId);
       if (seen.size > 500) seen.delete(seen.values().next().value as string);
+      // 只记元数据与文本长度，绝不记消息正文
+      logger.debug(
+        `收到消息：message_id=${msg.messageId} chat_type=${msg.chatType} sender=${msg.senderOpenId} @机器人=${msg.mentionedBot} 文本长度=${msg.text.length}`,
+      );
       // 飞书要求 3 秒内确认事件：不等待 agent，直接返回
-      void handleMessage(msg).catch((e: unknown) => log("处理消息失败", msg.messageId, e));
+      void handleMessage(msg).catch((e: unknown) => logger.error("处理消息失败", msg.messageId, e));
     },
     async onCardAction(data) {
       const parsed = parseCardActionEvent(data);
-      if (!parsed) return undefined;
+      if (!parsed) {
+        // 真机上按钮 value 形状不对时最容易卡在这里：只打顶层字段名，不打载荷内容
+        logger.warn(
+          `card.action.trigger：载荷解析不出审批动作（按钮 value 应为 {kaidan_action, proposal_id}），顶层字段：${topLevelKeys(data)}`,
+        );
+        return undefined;
+      }
+      const a = parsed.action;
+      logger.info(
+        `card.action.trigger：动作=${a.action} 提案=${a.proposalId} 操作人=${a.operatorOpenId} 原卡=${parsed.messageId ?? "(未带 open_message_id)"}`,
+      );
       // 处理结果以新卡片替换原卡片（im.v1.message.patch）；回调本身立即返回
       void (async () => {
-        const card = await handleCardAction(parsed.action);
+        const { card, outcome } = await decideCardAction(a);
+        logger.info(`card.action.trigger 处理完成：提案=${a.proposalId} 结果=${outcome}`);
         if (parsed.messageId) await client().updateCard(parsed.messageId, card);
         else if (parsed.chatId) await send({ chatId: parsed.chatId }, card);
-      })().catch((e: unknown) => log("处理卡片回调失败", parsed.action.proposalId, e));
+        else logger.warn(`card.action.trigger：回调既没带 open_message_id 也没带 open_chat_id，无法回卡 提案=${a.proposalId}`);
+      })().catch((e: unknown) => logger.error("处理卡片回调失败", a.proposalId, e));
       return undefined;
     },
   };
+
+  function bannerBot(): BotInfo {
+    if (!connection || connection.botOpenId === "") {
+      return { error: connection?.botInfoError ?? "长连接没有返回机器人 open_id" };
+    }
+    return connection.botName === undefined
+      ? { openId: connection.botOpenId }
+      : { openId: connection.botOpenId, name: connection.botName };
+  }
 
   return {
     handleMessage,
@@ -226,22 +307,54 @@ export function buildFeishuSurface(deps: SurfaceDeps, opts: FeishuSurfaceOptions
     runScheduled,
     async start() {
       if (connection) return;
-      connection = opts.connect ? await opts.connect(handlers) : await connectFeishu(deps, handlers, sleep);
+      try {
+        connection = opts.connect ? await opts.connect(handlers) : await connectFeishu(deps, handlers, sleep, logger);
+      } catch (e) {
+        // 连不上也要把自述打出来：至少能看出租户、模型、users 有没有填对，以及卡在哪一步
+        const reason = botFailureReason(e);
+        const bot: BotInfo =
+          reason !== undefined ? { error: reason } : { skipped: `长连接未建立：${describeError(e)}` };
+        for (const line of renderStartupBanner({
+          config,
+          bot,
+          connection: "未建立",
+          scheduleCount: 0,
+          logLevel: logger.level,
+        })) {
+          logger.error(line);
+        }
+        throw e;
+      }
       jobs = createSchedules(config, runScheduled, {
-        onError: (kind, e) => log(`定时任务 ${kind} 出错`, e),
+        onError: (kind, e) => logger.error(`定时任务 ${kind} 出错`, e),
         nameSuffix: randomUUID().slice(0, 8),
         ...opts.schedule,
       });
       opts.onSchedules?.(jobs);
-      log(`已连接飞书；定时任务 ${jobs.length} 个`);
+      for (const line of renderStartupBanner({
+        config,
+        bot: bannerBot(),
+        connection: connection.status?.() ?? "已建立",
+        scheduleCount: jobs.length,
+        logLevel: logger.level,
+      })) {
+        logger.info(line);
+      }
     },
     async stop() {
       for (const j of jobs) j.stop();
       jobs = [];
       connection?.close();
       connection = undefined;
+      logger.info("已停止：长连接与定时任务都已收干净");
     },
   };
+}
+
+function topLevelKeys(data: unknown): string {
+  if (typeof data !== "object" || data === null) return `(${typeof data})`;
+  const keys = Object.keys(data as Record<string, unknown>);
+  return keys.length > 0 ? keys.join(",") : "(无)";
 }
 
 export const createFeishuSurface: CreateFeishuSurface = (deps) => buildFeishuSurface(deps);

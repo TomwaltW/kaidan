@@ -1,7 +1,16 @@
 // 真实的 LarkClientLike：消息发送 im.v1.message.create，卡片更新 im.v1.message.patch（spec 附录 D）。
 // SDK 调用封装在 LarkImApi 这个小接口后面，测试用 fake 实现，不联网。
+// 任何一次调用失败（返回 code≠0 或直接抛错）都先打一行排错日志：调用名、操作类型、code、msg、log_id。
 import * as lark from "@larksuiteoapi/node-sdk";
 import { ErrorCode, KaidanError, type KaidanConfig, type LarkClientLike, type OutboundCard } from "@kaidan/contracts";
+import {
+  BOT_INFO_FAILURE_PREFIX,
+  FEISHU_CALLS,
+  describeFeishuFailure,
+  extractFeishuError,
+  type FeishuCall,
+} from "./feishu-error.js";
+import { createLogger, createSdkLogger, type Logger } from "./log.js";
 import { FEISHU_RATE_LIMIT_CODES, realSleep, withRateLimitRetry, type Sleep } from "./retry.js";
 
 export interface LarkApiResult {
@@ -36,13 +45,13 @@ export function readFeishuCredentials(config: KaidanConfig, env: NodeJS.ProcessE
   return { appId, appSecret, domain: f.domain === "lark" ? lark.Domain.Lark : lark.Domain.Feishu };
 }
 
-export function createSdkClient(cred: FeishuCredentials): lark.Client {
+export function createSdkClient(cred: FeishuCredentials, logger: Logger = createLogger()): lark.Client {
   return new lark.Client({
     appId: cred.appId,
     appSecret: cred.appSecret,
     domain: cred.domain,
     appType: lark.AppType.SelfBuild,
-    logger: stderrLogger,
+    logger: createSdkLogger(logger),
   });
 }
 
@@ -53,24 +62,43 @@ export function sdkImApi(client: lark.Client): LarkImApi {
   };
 }
 
-/** 机器人自身 open_id：GET /open-apis/bot/v3/info → { bot: { open_id } }（TODO(真机验证)） */
-export async function fetchBotOpenId(client: lark.Client): Promise<string> {
-  const r: unknown = await client.request({ url: "/open-apis/bot/v3/info", method: "GET" });
-  const bot = typeof r === "object" && r !== null ? (r as { bot?: { open_id?: unknown } }).bot : undefined;
-  if (typeof bot?.open_id !== "string" || bot.open_id === "") {
-    throw new KaidanError(ErrorCode.UPSTREAM, "获取机器人信息失败：/open-apis/bot/v3/info 未返回 open_id");
-  }
-  return bot.open_id;
+export interface BotInfo {
+  openId: string;
+  name?: string;
 }
 
-/** SDK 日志统一写 stderr（MCP stdio 等场景下 stdout 只能留给协议消息） */
-export const stderrLogger = {
-  error: (...msg: unknown[]) => console.error("[lark]", ...msg),
-  warn: (...msg: unknown[]) => console.error("[lark]", ...msg),
-  info: (...msg: unknown[]) => console.error("[lark]", ...msg),
-  debug: () => {},
-  trace: () => {},
-};
+/**
+ * 机器人自身信息：GET /open-apis/bot/v3/info → { code, msg, bot: { open_id, app_name } }（TODO(真机验证)）。
+ * 失败时抛出的消息统一以 BOT_INFO_FAILURE_PREFIX 开头，启动自述照抄它，不静默跳过。
+ */
+export async function fetchBotInfo(client: lark.Client, logger: Logger = createLogger()): Promise<BotInfo> {
+  const fail = (reason: string, cause?: unknown): KaidanError => {
+    const text = `${BOT_INFO_FAILURE_PREFIX}${reason}`;
+    logger.error(text);
+    return new KaidanError(ErrorCode.UPSTREAM, text, cause === undefined ? {} : { cause });
+  };
+
+  let r: unknown;
+  try {
+    r = await client.request({ url: "/open-apis/bot/v3/info", method: "GET" });
+  } catch (e) {
+    throw fail(describeFeishuFailure(FEISHU_CALLS.botInfo, e), e);
+  }
+
+  // 权限没开、应用没发版之类的错误是 code≠0 的正常响应，要把 code / msg / log_id 一起报出来
+  const info = extractFeishuError(r);
+  if (info.code !== undefined && info.code !== 0) {
+    throw fail(describeFeishuFailure(FEISHU_CALLS.botInfo, r));
+  }
+
+  const bot = typeof r === "object" && r !== null ? (r as { bot?: Record<string, unknown> }).bot : undefined;
+  const openId = bot?.["open_id"];
+  if (typeof openId !== "string" || openId === "") {
+    throw fail(`${FEISHU_CALLS.botInfo.call} 返回里没有 bot.open_id（机器人能力可能没开启，或应用还没发版）`);
+  }
+  const name = bot?.["app_name"];
+  return typeof name === "string" && name !== "" ? { openId, name } : { openId };
+}
 
 function check(what: string, r: LarkApiResult): LarkApiResult {
   const code = r.code ?? 0;
@@ -83,8 +111,31 @@ function check(what: string, r: LarkApiResult): LarkApiResult {
   });
 }
 
-export function createLarkClient(api: LarkImApi, opts: { sleep?: Sleep } = {}): LarkClientLike {
+/**
+ * 跑一次调用并在失败时打一行排错日志，然后把原始错误原样抛出去
+ * —— withRateLimitRetry 要靠原始形状（axios 的 response.status / data.code）判断是不是频控。
+ * 频控重试时每次失败各打一行，真机上能直接看出重试了几次。
+ */
+async function attempt(
+  call: FeishuCall,
+  what: string,
+  logger: Logger,
+  fn: () => Promise<LarkApiResult>,
+): Promise<LarkApiResult> {
+  let r: LarkApiResult;
+  try {
+    r = await fn();
+  } catch (e) {
+    logger.error(describeFeishuFailure(call, e));
+    throw e;
+  }
+  if ((r.code ?? 0) !== 0) logger.error(describeFeishuFailure(call, r));
+  return check(what, r);
+}
+
+export function createLarkClient(api: LarkImApi, opts: { sleep?: Sleep; logger?: Logger } = {}): LarkClientLike {
   const sleep = opts.sleep ?? realSleep;
+  const logger = opts.logger ?? createLogger();
   return {
     async sendCard(to, card: OutboundCard) {
       const target = to.chatId
@@ -95,10 +146,9 @@ export function createLarkClient(api: LarkImApi, opts: { sleep?: Sleep } = {}): 
       if (!target) throw new KaidanError(ErrorCode.VALIDATION, "发送卡片需要 chatId 或 openId");
       const r = await withRateLimitRetry(
         "发送卡片",
-        async () =>
-          check(
-            "发送卡片",
-            await api.createMessage({
+        () =>
+          attempt(FEISHU_CALLS.createMessage, "发送卡片", logger, () =>
+            api.createMessage({
               data: { receive_id: target.receive_id, msg_type: "interactive", content: JSON.stringify(card.json) },
               params: { receive_id_type: target.receive_id_type },
             }),
@@ -107,18 +157,19 @@ export function createLarkClient(api: LarkImApi, opts: { sleep?: Sleep } = {}): 
       );
       const messageId = r.data?.message_id;
       if (!messageId) throw new KaidanError(ErrorCode.UPSTREAM, "发送卡片失败：飞书未返回 message_id");
+      logger.debug(`已发送卡片：kind=${card.kind} message_id=${messageId}`);
       return { messageId };
     },
     async updateCard(messageId, card) {
       await withRateLimitRetry(
         "更新卡片",
-        async () =>
-          check(
-            "更新卡片",
-            await api.patchMessage({ data: { content: JSON.stringify(card.json) }, path: { message_id: messageId } }),
+        () =>
+          attempt(FEISHU_CALLS.patchMessage, "更新卡片", logger, () =>
+            api.patchMessage({ data: { content: JSON.stringify(card.json) }, path: { message_id: messageId } }),
           ),
         sleep,
       );
+      logger.debug(`已换卡：kind=${card.kind} message_id=${messageId}`);
     },
   };
 }
