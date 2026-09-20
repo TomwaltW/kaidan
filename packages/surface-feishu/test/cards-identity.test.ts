@@ -126,3 +126,17 @@ describe("身份解析", () => {
     expect((await identity.listScheduled()).map((a) => a.userId)).toEqual([ZHANG, LI]);
   });
 });
+
+describe("buildReplyCard 的 showDisclosure", () => {
+  it("showDisclosure:false → 只剩正文一个元素，没有分隔线与页脚", () => {
+    const c = buildReplyCard("模型服务配置有误，请联系管理员检查模型配置。", DISCLOSURE, { showDisclosure: false });
+    expect(elements(c.json)).toEqual([{ tag: "markdown", content: "模型服务配置有误，请联系管理员检查模型配置。" }]);
+    expect(cardText(c)).not.toContain("内容由 AI 生成");
+  });
+
+  it("showDisclosure:true 与缺省一致 → 正文 + 分隔线 + 页脚", () => {
+    const withOpt = buildReplyCard("x", DISCLOSURE, { showDisclosure: true });
+    expect(withOpt).toEqual(buildReplyCard("x", DISCLOSURE));
+    expect(cardText(withOpt)).toContain("内容由 AI 生成 · 测试 scripted");
+  });
+});

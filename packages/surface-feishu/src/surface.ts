@@ -145,7 +145,8 @@ export function buildFeishuSurface(deps: SurfaceDeps, opts: FeishuSurfaceOptions
       await send(to, buildNoticeCard(NOTICE_TEXT.agentFailed));
       return;
     }
-    await send(to, buildReplyCard(result.reply, result.disclosure));
+    // stoppedBy="error" 时正文是系统提示（例如「模型服务配置有误…」）、并非模型生成 → 不加公示页脚（CLI 同此规则）
+    await send(to, buildReplyCard(result.reply, result.disclosure, { showDisclosure: result.stoppedBy !== "error" }));
     for (const p of result.proposals) await send(to, buildProposalCard(p, config.timezone));
   }
 
