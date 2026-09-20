@@ -239,3 +239,45 @@ describe("B6⑥ runScheduled", () => {
     expect(s2.client.sent).toHaveLength(0);
   });
 });
+
+// 待办 #11（第 1 轮报告第 5 节）：出错时正文是系统消息、不是模型生成的内容 → reply 卡不带模型公示。
+// 两个方向都要断言：只断言「不含」会被「卡片压根没发」蒙混过去。
+describe("出错时的 reply 卡不公示模型", () => {
+  const SYSTEM_REPLY = "模型服务配置有误，请联系管理员检查模型配置。";
+
+  it("stoppedBy=error：卡片仍然发出（正文是系统消息），但不含「内容由 AI 生成」", async () => {
+    const agent = new FakeAgent([runResult({ reply: SYSTEM_REPLY, stoppedBy: "error" })]);
+    const { surface, client } = make(agent);
+
+    await surface.handleMessage(msg({ text: "今天有什么安排" }));
+
+    expect(client.sent.map((s) => s.card.kind)).toEqual(["reply"]);
+    const text = cardText(client.sent[0]!.card);
+    expect(text).toContain(SYSTEM_REPLY);
+    expect(text).not.toContain("内容由 AI 生成");
+    // 页脚整段（含分隔线）都不该留下
+    expect(text).not.toContain("测试 scripted");
+    expect(text).not.toContain('"hr"');
+  });
+
+  it("stoppedBy=final：卡片照旧带「内容由 AI 生成 · …」页脚", async () => {
+    const agent = new FakeAgent([runResult({ reply: "今天有 1 个会议。", stoppedBy: "final" })]);
+    const { surface, client } = make(agent);
+
+    await surface.handleMessage(msg({ text: "今天有什么安排" }));
+
+    expect(client.sent.map((s) => s.card.kind)).toEqual(["reply"]);
+    const text = cardText(client.sent[0]!.card);
+    expect(text).toContain("今天有 1 个会议。");
+    expect(text).toContain("内容由 AI 生成 · 测试 scripted");
+  });
+
+  it("max_steps / budget 提前结束的正文仍是模型生成 → 页脚保留", async () => {
+    for (const stoppedBy of ["max_steps", "budget"] as const) {
+      const agent = new FakeAgent([runResult({ reply: `到上限了（${stoppedBy}）`, stoppedBy })]);
+      const { surface, client } = make(agent);
+      await surface.handleMessage(msg({ text: "今天有什么安排" }));
+      expect(cardText(client.sent[0]!.card)).toContain("内容由 AI 生成 · 测试 scripted");
+    }
+  });
+});

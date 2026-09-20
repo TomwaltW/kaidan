@@ -16,6 +16,7 @@ export {
   buildProposalCard,
   buildReplyCard,
   disclosureFooter,
+  type ReplyCardOptions,
 } from "./cards.js";
 export { parseCardActionEvent, parseMessageEvent, type ParsedCardAction } from "./parse.js";
 export { createLarkClient, readFeishuCredentials, type LarkImApi } from "./lark-client.js";

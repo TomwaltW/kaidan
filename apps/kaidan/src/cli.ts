@@ -132,8 +132,17 @@ async function chat(
     log(`开单助手 · ${actor.displayName}（${actor.roles.join("/")}）`);
     log("直接输入问题，或用技能命令（如 /晨报、/会后 …）；:approve <提案id> 同意写入，:reject <提案id> 拒绝，:quit 退出");
     const rl = createInterface({ input: process.stdin, output: process.stdout, terminal: Boolean(process.stdin.isTTY) });
+    // 管道输入时 stdin 可能在 handleChatLine 还在等待时就读完，readline 随即自行关闭；
+    // 此后再调 rl.prompt() 会抛 ERR_USE_AFTER_CLOSE（"readline was closed"）并把退出码带成 1。
+    let rlClosed = false;
+    rl.once("close", () => {
+      rlClosed = true;
+    });
+    const prompt = () => {
+      if (!rlClosed) rl.prompt();
+    };
     rl.setPrompt("> ");
-    rl.prompt();
+    prompt();
     for await (const raw of rl) {
       const line = raw.trim();
       if (line === ":quit" || line === ":q") break;
@@ -144,8 +153,9 @@ async function chat(
           log(describeError(e));
         }
       }
-      rl.prompt();
+      prompt();
     }
+    // :quit 退出时才真正需要；stdin 读到 EOF 时 readline 已经关过，close() 是空操作
     rl.close();
   } finally {
     await app.close();
@@ -174,7 +184,8 @@ async function handleChatLine(app: App, actor: Actor, line: string): Promise<voi
 function printResult(r: AgentRunResult): void {
   out(r.reply || "（没有回复内容）");
   for (const p of r.proposals) printProposal(p);
-  out(`—— 内容由 AI 生成 · ${disclosureText(r.disclosure)}`);
+  // stoppedBy="error" 时正文是系统提示（例如「模型服务配置有误…」）、并非模型生成 → 不公示模型（飞书 reply 卡同此规则）
+  if (r.stoppedBy !== "error") out(`—— 内容由 AI 生成 · ${disclosureText(r.disclosure)}`);
   if (r.stoppedBy !== "final") log(`[提示] 本次运行提前结束：${r.stoppedBy}`);
 }
 

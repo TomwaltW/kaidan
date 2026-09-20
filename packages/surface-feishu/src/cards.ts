@@ -42,16 +42,25 @@ function card(elements: Record<string, unknown>[], header?: Record<string, unkno
   return json;
 }
 
-export function buildReplyCard(reply: string, disclosure: ModelDisclosure): OutboundCard {
+export interface ReplyCardOptions {
+  /** 缺省 true；为 false 时不加分隔线与模型公示页脚（正文不是模型生成的内容时用） */
+  showDisclosure?: boolean;
+}
+
+export function buildReplyCard(
+  reply: string,
+  disclosure: ModelDisclosure,
+  opts: ReplyCardOptions = {},
+): OutboundCard {
   const text = reply.trim() === "" ? "（没有可展示的内容）" : reply;
-  return {
-    kind: "reply",
-    json: card([
-      { tag: "markdown", content: text },
+  const elements: Record<string, unknown>[] = [{ tag: "markdown", content: text }];
+  if (opts.showDisclosure !== false) {
+    elements.push(
       { tag: "hr" },
       { tag: "markdown", content: disclosureFooter(disclosure), text_size: "notation", text_color: "grey" },
-    ]),
-  };
+    );
+  }
+  return { kind: "reply", json: card(elements) };
 }
 
 export function buildNoticeCard(text: string): OutboundCard {
