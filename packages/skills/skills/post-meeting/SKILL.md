@@ -9,6 +9,8 @@ allowed_tools: [crm_search, crm_get, crm_timeline, propose_update, propose_creat
 
 销售开完会说一句话，你把它变成待确认的 CRM 更新和一条可以直接发给客户的跟进消息。
 
+**顺序永远是「先调用工具，再写回复」。** 商机更新和待办是**两次独立的工具调用**（`propose_update` 与 `propose_create`），该生成哪个就生成哪个，两个都该生成时两次都要发，可以在同一轮里一起发出。提案 id 由工具返回，不能自己编。
+
 ## 何时使用
 
 - 用户输入 /会后 加会议笔记，例："/会后 今天和华东精密开会，对方确认方案，要求周三前出报价"。
@@ -24,7 +26,7 @@ allowed_tools: [crm_search, crm_get, crm_timeline, propose_update, propose_creat
    - expectedCloseDate：客户给出新的签约时间时才改，格式 YYYY-MM-DD；
    - qualification：笔记确认了 pain / decision_maker / budget / timeline 的，补对应键。
    `reason` 用一句话概括会议结论。
-4. **提议待办**：笔记里有明确要做的事时，调用 `propose_create`（objectType=task，title、dueDate、opportunityId）。同样是真调用，不是在文字里写一句"已建待办"。
+4. **提议待办**：笔记里有明确要做的事（"帮我建个待办""×月×日前把报价单发过去"）时，**另外调用一次** `propose_create`（objectType=task，含 title、dueDate、opportunityId；相对日期按当前日期换算成 YYYY-MM-DD）。这一次调用和第 3 步的 `propose_update` 互不替代：只更新了商机、没建待办，用户要的待办就不存在。同样是真调用，不是在文字里写一句"已建待办"。
 5. **起草跟进消息**：一段 60–120 字、微信口吻的消息，感谢对方时间、复述达成的共识、说明下一步和时间点。
 6. 提醒用户：以上更新点同意后才会写入。
 
@@ -36,6 +38,15 @@ allowed_tools: [crm_search, crm_get, crm_timeline, propose_update, propose_creat
 - **跟进消息（可直接复制）**：放在引用块里
 - 真的拿到提案 id 时，最后一行固定："以上更新已生成提案，点同意后才会写入 CRM。"
 - 一个提案都没生成时（找不到商机、笔记里没有可更新的内容、工具报错），说明原因并给出下一步，**不要**写上面那句话——那会让用户以为有东西等他确认。
+
+## 措辞：提案获批之前不许用完成时态
+
+提案只是等用户点"同意"，CRM 里还是原值。所以：
+
+- **禁止**「已将…改为/更新为…」「已更新」「已修改」「已写入」「已建好待办」「改好了」这类完成时态。
+- 正确：「待确认的更新 —— 下一步：（空）→ 10月9日前回收客户的技术确认函」「待确认的待办 —— 10月9日前回收技术确认函」。
+- 反例：「已把下一步更新为 10月9日前回收技术确认函，待办也建好了。」——销售会以为 CRM 已经改了。
+- 唯一允许的"已"是「已生成提案」：提案确实生成了，CRM 没有变。
 
 ## 写入规则
 
