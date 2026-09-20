@@ -19,7 +19,7 @@ export type ObjectMappingT = BitableMapping["objects"]["account"];
 /** 特殊键：原始手机号字段，只输出脱敏值 phoneMasked，不支持写入 */
 export const PHONE_KEY = "phone";
 
-type FieldKind = "person" | "link" | "links" | "datetime" | "date" | "number" | "text";
+export type FieldKind = "person" | "link" | "links" | "datetime" | "date" | "number" | "text";
 
 const FIELD_KINDS: Record<string, FieldKind> = {
   ownerId: "person",
@@ -34,7 +34,8 @@ const FIELD_KINDS: Record<string, FieldKind> = {
   probability: "number",
 };
 
-function kindOf(romField: string): FieldKind {
+/** ROM 字段名 → 期望的多维表格字段类别（doctor --online 的类型检查也用它，保证与读写走同一套判断） */
+export function kindOf(romField: string): FieldKind {
   return FIELD_KINDS[romField] ?? "text";
 }
 
@@ -170,7 +171,8 @@ function mapContactRole(text: string | undefined): string | undefined {
   return CONTACT_ROLE[text] ?? "unknown";
 }
 
-function stageMapOf(m: ObjectMappingT): Record<string, OpportunityStage> {
+/** 商机阶段：mapping.yaml 的 stageMap，没写就退回默认中文阶段名 */
+export function stageMapOf(m: ObjectMappingT): Record<string, OpportunityStage> {
   if (m.stageMap) return m.stageMap;
   // 未配置 stageMap 时按默认中文阶段名映射
   return Object.fromEntries(OPEN_STAGES.concat(["won", "lost"]).map((s) => [DEFAULT_STAGE_LABELS[s], s]));
