@@ -314,3 +314,59 @@ pnpm -s kaidan chat --config $CFG --as ou_rep_zhang --now 2026-09-21T09:00:00+08
 
 > 三幕是用 `printf '…\n:quit\n' | pnpm -s kaidan chat …` 分三次管道跑的（第 3 幕的 id 取自第 2 幕的输出）。
 > **录演示时请用交互式**：启动一次，三句话依次敲进去——同一个进程里第 3 幕的写入才落在第 2 幕看到的那份数据上。
+
+---
+
+## 附 2：离线彩排跑法（没有密钥时，用脚本 provider 走顺前两幕）
+
+手里没有百炼密钥、或者只想在开录前把节奏走顺时，可以用仓库里的多步脚本 fixture
+`apps/kaidan/test/fixtures/chat-steps-demo.json` 离线彩排**前两幕**。不联网、不需要 `KAIDAN_LLM_API_KEY`，
+配置直接用仓库里的 `config/demo.mock.yaml`：
+
+```bash
+cd /Users/shensikai/Documents/Projects/Kaidan/kaidan
+printf '/晨报\n/会后 今天和嘉禾物流开会，对方确认方案，要求周三前出报价\n:quit\n' \
+  | pnpm -s kaidan chat \
+      --config config/demo.mock.yaml \
+      --as ou_rep_zhang --now 2026-09-21T09:00:00+08:00 \
+      --script apps/kaidan/test/fixtures/chat-steps-demo.json
+```
+
+脚本 provider 不看输入、按顺序吐步骤：`/晨报` 用掉第 1 步，`/会后` 用掉第 2 步（一次同时发出
+`propose_update` + `propose_create`）和第 3 步（收尾正文）。输入条数变了，步数就要跟着改，
+否则会报「脚本 provider 的 N 个步骤已用完」。
+
+**2026-09-21 实跑原文**（stdout；两个提案 id 每次都不一样）：
+
+```
+> 今天 1 个会：10:00 与华东精密复盘方案。另有 2 个商机需要关注。
+—— 内容由 AI 生成 · 脚本 scripted
+> 已经按你说的生成 2 条提案，点同意后才会写回 CRM。
+
+提案 prop_208938b2-123d-4211-b252-1b929e4bd408（修改 opportunity opp_001，pending）
+  stage: solution → negotiation
+  nextStep: （空） → 周三前出报价
+  理由：会后口述：对方确认方案，要求周三前出报价
+  点同意后才会写入：:approve prop_208938b2-123d-4211-b252-1b929e4bd408　不要：:reject prop_208938b2-123d-4211-b252-1b929e4bd408
+
+提案 prop_558d42c0-e052-462e-9544-06624202c9aa（新建 task，pending）
+  title: （空） → 发送嘉禾物流二期产线正式报价单
+  dueDate: （空） → 2026-09-23
+  opportunityId: （空） → opp_001
+  理由：今天和嘉禾物流开会，对方确认方案，要求周三前出报价
+  点同意后才会写入：:approve prop_558d42c0-e052-462e-9544-06624202c9aa　不要：:reject prop_558d42c0-e052-462e-9544-06624202c9aa
+—— 内容由 AI 生成 · 脚本 scripted
+>
+```
+
+stderr 上另有开场两行（`开单助手 · 张三（rep）` 和命令提示）以及收尾的
+`[surface-feishu][info] 已停止：长连接与定时任务都已收干净`，正常。
+彩排会往 `.data/demo.db` 追加提案记录（`.data/` 不入库）。
+
+两条限制，务必记住：
+
+- **页脚是故意钉死的「脚本 scripted」**：`apps/kaidan/src/cli.ts` 里写明脚本回放不是模型生成，
+  用脚本 provider 的缺省公示，不冒用配置里的模型名。所以离线跑出来的页脚一定是
+  `—— 内容由 AI 生成 · 脚本 scripted`。**离线只能彩排，发给客户的那段录屏仍然要真密钥**（按 §1.1 准备）。
+- **离线彩排最多覆盖前两幕**：第 3 幕 `:approve <提案id>` 要的 id 是运行期随机生成的，
+  固定的管道输入给不出来。为什么，见本文第 169 行那段。第 3 幕仍按 §4 的写法：交互式启动一次，把第 2 幕屏幕上的 id 贴回去。
