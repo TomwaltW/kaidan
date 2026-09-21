@@ -146,7 +146,7 @@ pnpm -s kaidan mcp --config <配置文件> --as <openId>
 - `pnpm --filter @kaidan/mcp-server start` **不是**入口：它只会往 stderr 打印上面这条指引并以退出码 2 结束。
 - 该进程的日志一律走 stderr，stdout 只有协议消息；stdin 关闭即退出。
 
-以 Claude Code 为例（`.mcp.json`）：
+任何支持 stdio 传输的 MCP 客户端都能接，配置形如 `{ command, args, cwd }`：
 
 ```json
 {
