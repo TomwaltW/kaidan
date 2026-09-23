@@ -6,12 +6,39 @@ import { z } from "zod";
 import { ErrorCode, KaidanError } from "./errors.js";
 import { Id, Role } from "./rom.js";
 
+/** 运行时只允许接入国产已备案模型（CLAUDE.md 硬规则 3）；增删须改契约 */
+export const LLM_HOST_ALLOWLIST = [
+  "dashscope.aliyuncs.com", // 阿里云百炼
+  "api.deepseek.com", // DeepSeek
+  "open.bigmodel.cn", // 智谱
+  "ark.cn-beijing.volces.com", // 火山方舟
+  "api.moonshot.cn", // Kimi
+] as const;
+
+/** 协议必须是 https，hostname 逐字等于名单之一（不含子域名、不做后缀匹配）；不设任何放行 / 中转 / 代理开关 */
+function isAllowedLlmBaseURL(url: string): boolean {
+  let u: URL;
+  try {
+    u = new URL(url);
+  } catch {
+    return false;
+  }
+  return u.protocol === "https:" && (LLM_HOST_ALLOWLIST as readonly string[]).includes(u.hostname);
+}
+
 export const KaidanConfig = z.object({
   tenantId: Id,
   timezone: z.string().min(1), // "Asia/Shanghai"
   llm: z.object({
     kind: z.enum(["openai_compatible", "scripted"]),
-    baseURL: z.string().url().optional(), // 如 https://dashscope.aliyuncs.com/compatible-mode/v1
+    baseURL: z
+      .string()
+      .url()
+      .refine(
+        isAllowedLlmBaseURL,
+        `llm.baseURL 只允许国产模型服务域名：${LLM_HOST_ALLOWLIST.join("、")}（须 https，hostname 逐字匹配，不含子域名）`,
+      )
+      .optional(), // 如 https://dashscope.aliyuncs.com/compatible-mode/v1
     model: z.string().optional(),
     apiKeyEnv: z.string().optional(), // 从环境变量读取密钥，配置文件里不放密钥
     temperature: z.number().min(0).max(2).optional(),

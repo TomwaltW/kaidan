@@ -31,9 +31,17 @@ export const CrmGetOutput = z.object({ item: RomRecord.nullable() });
 export const CrmTimelineInput = z.object({
   accountId: Id.optional(),
   opportunityId: Id.optional(), // 两者至少给一个，否则 VALIDATION
-  limit: z.number().int().min(1).max(50).optional(), // 缺省 20，按 occurredAt 倒序
+  limit: z.number().int().min(1).max(50).optional(), // 跟进记录每页条数，缺省 20，按 occurredAt 倒序
+  cursor: z.string().optional(), // 跟进记录翻页：传上一页的 nextCursor
+  tasksLimit: z.number().int().min(1).max(100).optional(), // 待办每页条数，缺省 50（= 第 2 轮的行为），按 dueDate 升序
+  tasksCursor: z.string().optional(), // 待办翻页：传上一页的 tasksNextCursor
 });
-export const CrmTimelineOutput = z.object({ activities: z.array(Activity), tasks: z.array(Task) });
+export const CrmTimelineOutput = z.object({
+  activities: z.array(Activity),
+  tasks: z.array(Task),
+  nextCursor: z.string().optional(), // 还有更多跟进记录；没有下一页时不出现这个键
+  tasksNextCursor: z.string().optional(), // 还有更多待办；没有下一页时不出现这个键
+});
 
 export const RiskReason = z.enum([
   "stale_activity", // 未关闭且 lastActivityAt 缺失或早于 now - staleDays
@@ -88,6 +96,8 @@ export interface ToolContext {
   traceId: string;
   now: Date;
   skill?: string;
+  /** 本次调用所属技能的 allowed_tools；给了就由 registry 拦截越界调用（MCP 不给 = 不限技能边界） */
+  allowedTools?: readonly ToolName[];
 }
 
 export interface ToolDef<I = unknown, O = unknown> {
@@ -110,6 +120,9 @@ export interface ToolRegistry {
   /**
    * 统一入口，永不抛出：
    * 未知工具/输入不合法 → VALIDATION；KaidanError → 对应 code；其他异常 → UPSTREAM。
+   * ctx.allowedTools 存在且不含 name → VALIDATION（当前技能不允许调用工具 {name}），照常写 tool_call（errorCode: "VALIDATION"）；
+   *   这一检查先于「未知工具」检查：技能外的未知工具名得到的也是这句文案（与第 2 轮 agent 侧的文案逐字一致）。
+   * rawInput 为 string 时先按 JSON 解析（空串视为 {}）；解析失败 → VALIDATION（工具 {name} 的参数不是合法 JSON），照常写 tool_call。
    * 每次调用写一条 audit tool_call（data: {tool, ok, ms, errorCode?}）；
    * PERMISSION_DENIED 额外写一条 permission_denied。
    * 输出返回前：剔除所有 raw 字段；手机号只允许脱敏形态。

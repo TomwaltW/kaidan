@@ -24,9 +24,14 @@ export interface LlmToolSpec {
   parameters: Record<string, unknown>; // JSON Schema（由 zod 的 z.toJSONSchema 生成）
 }
 
+/** 工具选择（OpenAI 兼容接口的 tool_choice）；{ name } 表示强制调用这一个工具 */
+export type LlmToolChoice = "auto" | "none" | "required" | { name: ToolName };
+
 export interface LlmRequest {
   messages: LlmMessage[];
   tools?: LlmToolSpec[];
+  /** 只在 tools 非空时下发；{name} 映射为 {type:"function",function:{name}} */
+  toolChoice?: LlmToolChoice;
   temperature?: number;
   maxTokens?: number;
   signal?: AbortSignal;
@@ -56,7 +61,7 @@ export interface LlmProvider {
   chat(req: LlmRequest): Promise<LlmResponse>;
 }
 
-/** 测试与演示用：按顺序吐出预设步骤，不看输入；requests 记录收到的每次请求 */
+/** 测试与演示用：按顺序吐出预设步骤，不看输入；requests 记录收到的每次请求（除 signal 外逐字段深拷贝，含 toolChoice） */
 export interface ScriptStep {
   toolCalls?: { name: string; arguments: Record<string, unknown> }[];
   content?: string;

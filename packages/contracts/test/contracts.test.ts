@@ -8,8 +8,11 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import {
   BitableMapping,
+  CrmTimelineInput,
+  CrmTimelineOutput,
   ErrorCode,
   KaidanError,
+  LLM_HOST_ALLOWLIST,
   RomDataset,
   SKILL_NAMES,
   SkillFrontmatter,
@@ -17,6 +20,10 @@ import {
   isKaidanError,
   loadConfig,
   notImplemented,
+  type Actor,
+  type LlmRequest,
+  type LlmToolChoice,
+  type ToolContext,
 } from "../src/index.js";
 
 const ROOT = fileURLToPath(new URL("../../../", import.meta.url));
@@ -191,6 +198,56 @@ ${extra}`;
     expect(cfg.adapter.mock?.datasetPath).toBe(join(dir, "data/d.json"));
     expect(cfg.skillsDir).toBe(join(dir, "my-skills"));
   });
+
+  // 第 3 轮 R4：llm.baseURL 只允许国产模型服务域名（https、hostname 逐字匹配、不含子域名）
+  const withBaseURL = (url: string) =>
+    minimal("  kind: mock\n  mock: { datasetPath: d.json }").replace(
+      "  kind: scripted\n",
+      `  kind: openai_compatible\n  baseURL: "${url}"\n`,
+    );
+
+  it("R4：llm.baseURL 指向境外域名（api.openai.com）→ CONFIG，提示只允许国产模型服务域名", async () => {
+    const path = await write("baseurl-openai.yaml", withBaseURL("https://api.openai.com/v1"));
+    const e = await expectKaidanError(() => loadConfig(path), ErrorCode.CONFIG);
+    expect(e.message).toContain("llm.baseURL 只允许国产模型服务域名");
+  });
+
+  it("R4：llm.baseURL 用 http（白名单域名也不行）→ CONFIG", async () => {
+    const path = await write("baseurl-http.yaml", withBaseURL("http://dashscope.aliyuncs.com/compatible-mode/v1"));
+    const e = await expectKaidanError(() => loadConfig(path), ErrorCode.CONFIG);
+    expect(e.message).toContain("llm.baseURL 只允许国产模型服务域名");
+  });
+
+  it("R4：子域名 / 后缀拼接 / userinfo 伪装都被拒（hostname 逐字匹配）", async () => {
+    const bad = [
+      "https://evil.dashscope.aliyuncs.com/v1",
+      "https://dashscope.aliyuncs.com.evil.example/v1",
+      "https://dashscope.aliyuncs.com@evil.example/v1",
+    ];
+    for (const [i, url] of bad.entries()) {
+      const path = await write(`baseurl-bad-${i}.yaml`, withBaseURL(url));
+      const e = await expectKaidanError(() => loadConfig(path), ErrorCode.CONFIG);
+      expect(e.message, url).toContain("llm.baseURL 只允许国产模型服务域名");
+    }
+  });
+
+  it("R4：白名单里的 5 个域名（https）都能通过，baseURL 原样保留", async () => {
+    for (const host of LLM_HOST_ALLOWLIST) {
+      const url = `https://${host}/v1`;
+      const cfg = await loadConfig(await write(`baseurl-ok-${host}.yaml`, withBaseURL(url)));
+      expect(cfg.llm.baseURL).toBe(url);
+    }
+  });
+
+  it("R4：LLM_HOST_ALLOWLIST 恰好是这 5 个域名，顺序固定", () => {
+    expect([...LLM_HOST_ALLOWLIST]).toEqual([
+      "dashscope.aliyuncs.com",
+      "api.deepseek.com",
+      "open.bigmodel.cn",
+      "ark.cn-beijing.volces.com",
+      "api.moonshot.cn",
+    ]);
+  });
 });
 
 describe("技能契约", () => {
@@ -219,6 +276,33 @@ describe("技能契约", () => {
     expect(SkillFrontmatter.safeParse({ ...base, command: "晨报" }).success).toBe(false);
     expect(SkillFrontmatter.safeParse({ ...base, allowed_tools: ["crm_delete"] }).success).toBe(false);
     expect(SkillFrontmatter.safeParse({ ...base, allowed_tools: [] }).success).toBe(false);
+  });
+});
+
+describe("第 3 轮契约字段（R1–R3）", () => {
+  it("R2：CrmTimelineInput 保留 cursor / tasksLimit / tasksCursor，tasksLimit 只接受 1–100", () => {
+    const input = { opportunityId: "opp_2", limit: 1, cursor: "1", tasksLimit: 2, tasksCursor: "2" };
+    expect(CrmTimelineInput.parse(input)).toEqual(input);
+    expect(CrmTimelineInput.safeParse({ opportunityId: "opp_2", tasksLimit: 101 }).success).toBe(false);
+    expect(CrmTimelineInput.safeParse({ opportunityId: "opp_2", tasksLimit: 0 }).success).toBe(false);
+  });
+
+  it("R2：CrmTimelineOutput 保留 nextCursor / tasksNextCursor，没有下一页时不出现这两个键", () => {
+    const paged = { activities: [], tasks: [], nextCursor: "1", tasksNextCursor: "2" };
+    expect(CrmTimelineOutput.parse(paged)).toEqual(paged);
+    expect(Object.keys(CrmTimelineOutput.parse({ activities: [], tasks: [] })).sort()).toEqual(["activities", "tasks"]);
+  });
+
+  it("R1 / R3：ToolContext.allowedTools 与 LlmRequest.toolChoice 的形状（类型层由 pnpm typecheck 把关）", () => {
+    const ctx: ToolContext = { actor: {} as Actor, traceId: "t-r1", now: new Date(0), allowedTools: ["crm_get", "crm_timeline"] };
+    expect(ctx.allowedTools).toEqual(["crm_get", "crm_timeline"]);
+    const choices: LlmToolChoice[] = ["auto", "none", "required", { name: "propose_update" }];
+    const req: LlmRequest = { messages: [{ role: "user", content: "晨报" }], toolChoice: "required" };
+    expect(req.toolChoice).toBe("required");
+    expect(choices).toHaveLength(4);
+    // @ts-expect-error 具名形态只接受 ToolName 里的工具名
+    const unknownTool: LlmToolChoice = { name: "crm_delete" };
+    expect(unknownTool).toEqual({ name: "crm_delete" });
   });
 });
 

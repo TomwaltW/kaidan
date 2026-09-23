@@ -12,7 +12,7 @@ llm:
   disclosure:
     providerName: 阿里云百炼
     modelName: 通义千问
-    # filingNo: 上线前填写所用模型的备案号 / 上线编号（界面公示用）
+    # filingNo: <待用户取回：qwen-plus 备案号 / 上线编号>
 adapter:
   kind: mock
   mock:
