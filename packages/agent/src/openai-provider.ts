@@ -12,6 +12,7 @@ import {
   type LlmRequest,
   type LlmResponse,
   type LlmToolCall,
+  type LlmToolChoice,
 } from "@kaidan/contracts";
 
 export interface OpenAICompatibleOptions {
@@ -114,12 +115,18 @@ function buildBody(llm: KaidanConfig["llm"], req: LlmRequest): Record<string, un
       type: "function",
       function: { name: t.name, description: t.description, parameters: t.parameters },
     }));
+    // tool_choice 只在 tools 非空时下发（第 3 轮 R3）；{name} → {type:"function",function:{name}}
+    if (req.toolChoice !== undefined) body["tool_choice"] = toWireToolChoice(req.toolChoice);
   }
   const temperature = req.temperature ?? llm.temperature;
   if (temperature !== undefined) body["temperature"] = temperature;
   const maxTokens = req.maxTokens ?? llm.maxTokens;
   if (maxTokens !== undefined) body["max_tokens"] = maxTokens;
   return body;
+}
+
+function toWireToolChoice(c: LlmToolChoice): string | Record<string, unknown> {
+  return typeof c === "string" ? c : { type: "function", function: { name: c.name } };
 }
 
 function toWireMessage(m: LlmMessage): Record<string, unknown> {

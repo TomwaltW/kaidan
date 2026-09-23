@@ -56,5 +56,6 @@ function copyRequest(req: LlmRequest): LlmRequest {
   if (req.tools !== undefined) copy.tools = structuredClone(req.tools);
   if (req.temperature !== undefined) copy.temperature = req.temperature;
   if (req.maxTokens !== undefined) copy.maxTokens = req.maxTokens;
+  if (req.toolChoice !== undefined) copy.toolChoice = structuredClone(req.toolChoice);
   return copy;
 }

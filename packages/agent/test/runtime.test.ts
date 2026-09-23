@@ -12,6 +12,7 @@ import {
   type LlmProvider,
   type LlmRequest,
   type ScriptStep,
+  type ToolContext,
 } from "@kaidan/contracts";
 import { createAgentRuntime, createScriptedProvider } from "../src/index.js";
 import { ADMIN, FakeAudit, FakeProposals, FakeRegistry, START, TENANT, ZHANG, skillSet } from "./fakes.js";
@@ -119,7 +120,7 @@ describe("权限与工具暴露", () => {
     for (const t of tools) expect(t.parameters).not.toHaveProperty("$schema");
   });
 
-  it("调用技能不允许的工具 → VALIDATION 工具消息，不进 registry，运行继续", async () => {
+  it("调用技能不允许的工具 → 照样交给 registry（ctx 带技能的 allowedTools），由 registry 返回 VALIDATION，运行继续", async () => {
     const { agent, provider, tools } = setup([
       { toolCalls: [{ name: "propose_update", arguments: { ref: { type: "opportunity", id: "opp_1" }, patch: {}, reason: "x" } }] },
       { content: "抱歉，晨报不能修改 CRM" },
@@ -127,31 +128,47 @@ describe("权限与工具暴露", () => {
     const r = await agent.run(input("/晨报"));
     expect(r.stoppedBy).toBe("final");
     expect(r.reply).toBe("抱歉，晨报不能修改 CRM");
-    expect(tools.calls).toHaveLength(0);
-    expect(r.toolCalls).toEqual([{ name: "propose_update", ok: false, ms: 0, errorCode: "VALIDATION" }]);
+    // 第 3 轮 R1：被拒的调用也进 registry —— ctx 带着 daily-brief 的 allowedTools，参数是模型给的原始 JSON 字符串
+    expect(tools.calls).toHaveLength(1);
+    expect(tools.calls[0]!.name).toBe("propose_update");
+    expect(tools.calls[0]!.ctx.allowedTools).toEqual(["pipeline_snapshot", "calendar_today", "crm_get", "crm_timeline"]);
+    expect(tools.calls[0]!.input).toBe('{"ref":{"type":"opportunity","id":"opp_1"},"patch":{},"reason":"x"}');
+    // r.toolCalls 是 registry 给的结果（FakeRegistry 拒绝时 ms=1；第 2 轮 agent 自己拦截时是 0）
+    expect(r.toolCalls).toEqual([{ name: "propose_update", ok: false, ms: 1, errorCode: "VALIDATION" }]);
     const [msg] = toolMessages(provider.requests[1]);
     expect(msg?.toolCallId).toBe("call_0_0");
-    expect(JSON.parse(msg!.content)).toMatchObject({ ok: false, error: { code: "VALIDATION" } });
+    expect(JSON.parse(msg!.content)).toEqual({
+      ok: false,
+      error: { code: "VALIDATION", message: "当前技能不允许调用工具 propose_update" },
+    });
   });
 
-  it("工具参数不是合法 JSON → VALIDATION 工具消息", async () => {
+  it("工具参数不是合法 JSON → 原始字符串照样交给 registry，由 registry 返回 VALIDATION", async () => {
+    const seen: LlmRequest[] = [];
     const provider: LlmProvider = {
       id: "bad-json",
       disclosure: { providerName: "测试", modelName: "bad" },
-      chat: async (req) =>
-        req.messages.some((m) => m.role === "tool")
+      chat: async (req) => {
+        seen.push(req);
+        return req.messages.some((m) => m.role === "tool")
           ? { message: { role: "assistant", content: "完成" }, usage: { inputTokens: 1, outputTokens: 1 }, finishReason: "stop" }
           : {
               message: { role: "assistant", content: null, toolCalls: [{ id: "c1", name: "crm_search", arguments: "{oops" }] },
               usage: { inputTokens: 1, outputTokens: 1 },
               finishReason: "tool_calls",
-            },
+            };
+      },
     };
     const { agent, tools } = setup([], { provider });
     const r = await agent.run(input("查一下"));
     expect(r.stoppedBy).toBe("final");
-    expect(r.toolCalls[0]).toMatchObject({ name: "crm_search", ok: false, errorCode: "VALIDATION" });
-    expect(tools.calls).toHaveLength(0);
+    expect(r.toolCalls).toEqual([{ name: "crm_search", ok: false, ms: 1, errorCode: "VALIDATION" }]);
+    expect(tools.calls.map((c) => [c.name, c.input])).toEqual([["crm_search", "{oops"]]);
+    expect(tools.calls[0]!.ctx.allowedTools).toEqual(skillSet().find((s) => s.name === "assistant")!.allowedTools);
+    expect(JSON.parse(toolMessages(seen[1])[0]!.content)).toEqual({
+      ok: false,
+      error: { code: "VALIDATION", message: "工具 crm_search 的参数不是合法 JSON" },
+    });
   });
 });
 
@@ -196,8 +213,14 @@ describe("工具循环", () => {
       { name: "calendar_today", ok: true, ms: 1 },
     ]);
     expect(tools.calls.map((c) => c.name)).toEqual(["pipeline_snapshot", "calendar_today"]);
-    expect(tools.calls[0]!.input).toEqual({ scope: "me", closingWithinDays: 30 });
-    expect(tools.calls[0]!.ctx).toMatchObject({ actor: ZHANG, traceId: "t-b1", skill: "daily-brief" });
+    // 第 3 轮 R1：参数是模型给的原始 JSON 字符串，ctx 带技能的 allowedTools（解析与越界拦截都在 registry）
+    expect(tools.calls[0]!.input).toBe('{"scope":"me","closingWithinDays":30}');
+    expect(tools.calls[0]!.ctx).toMatchObject({
+      actor: ZHANG,
+      traceId: "t-b1",
+      skill: "daily-brief",
+      allowedTools: ["pipeline_snapshot", "calendar_today", "crm_get", "crm_timeline"],
+    });
     expect(tools.calls[0]!.ctx.now.toISOString()).toBe(new Date(START).toISOString());
 
     const msgs = toolMessages(provider.requests[1]);
@@ -397,3 +420,132 @@ describe("审计", () => {
   });
 });
 
+describe("第 3 轮 R1：技能边界与参数解析交给 registry", () => {
+  it("FakeRegistry 与第 3 轮 registry 契约一致：越界与未知工具名同一句文案、字符串参数由它解析、不带 allowedTools 不设边界", async () => {
+    const tools = new FakeRegistry();
+    const ctx: ToolContext = { actor: ZHANG, traceId: "t-fake", now: new Date(START) };
+    const gated: ToolContext = { ...ctx, allowedTools: ["crm_get", "schema_inspect"] };
+    const rejected = (message: string) => ({ ok: false, error: { code: "VALIDATION", message }, ms: 1 });
+    expect(await tools.invoke(gated, "propose_update", { reason: "x" })).toEqual(rejected("当前技能不允许调用工具 propose_update"));
+    expect(await tools.invoke(gated, "crm_delete", "{}")).toEqual(rejected("当前技能不允许调用工具 crm_delete"));
+    expect(await tools.invoke(gated, "crm_get", '{"type":"opportunity","id":"opp_1"}')).toEqual({
+      ok: true,
+      output: { echo: { type: "opportunity", id: "opp_1" } },
+      ms: 1,
+    });
+    expect(await tools.invoke(gated, "schema_inspect", "")).toEqual({ ok: true, output: { echo: {} }, ms: 1 });
+    expect(await tools.invoke(gated, "crm_get", "{不是 JSON")).toEqual(rejected("工具 crm_get 的参数不是合法 JSON"));
+    // 不带 allowedTools（MCP 口径）= 不设技能边界；对象参数照旧直接用
+    expect(await tools.invoke(ctx, "propose_update", { reason: "x" })).toEqual({ ok: true, output: { echo: { reason: "x" } }, ms: 1 });
+    expect(tools.calls.map((c) => c.name)).toEqual(["propose_update", "crm_delete", "crm_get", "schema_inspect", "crm_get", "propose_update"]);
+  });
+
+  it("参数为空串 → 原样交给 registry（由 registry 视为 {}），调用成功", async () => {
+    const provider: LlmProvider = {
+      id: "empty-args",
+      disclosure: { providerName: "测试", modelName: "empty" },
+      chat: async (req) =>
+        req.messages.some((m) => m.role === "tool")
+          ? { message: { role: "assistant", content: "好" }, usage: { inputTokens: 1, outputTokens: 1 }, finishReason: "stop" }
+          : {
+              message: { role: "assistant", content: null, toolCalls: [{ id: "c1", name: "calendar_today", arguments: "" }] },
+              usage: { inputTokens: 1, outputTokens: 1 },
+              finishReason: "tool_calls",
+            },
+    };
+    const { agent, tools } = setup([], { provider });
+    const r = await agent.run(input("/晨报"));
+    expect(tools.calls.map((c) => [c.name, c.input])).toEqual([["calendar_today", ""]]);
+    expect(r.toolCalls).toEqual([{ name: "calendar_today", ok: true, ms: 1 }]);
+    expect(r).toMatchObject({ stoppedBy: "final", reply: "好" });
+  });
+});
+
+describe("第 3 轮 R3：说了「已生成提案」却没调写入工具 → 补救追问一次", () => {
+  const PROPOSE = {
+    name: "propose_update",
+    arguments: { ref: { type: "opportunity", id: "opp_1" }, patch: { nextStep: "发报价单" }, reason: "会后" },
+  };
+  const FOLLOW_UP = { role: "user", content: "你还没有调用写入工具，现在只输出工具调用" };
+
+  /** propose_update 成功时生成一个真提案（FakeProposals），供 r.proposals 回收 */
+  function proposeOk(h: ReturnType<typeof setup>) {
+    h.tools.handlers.set("propose_update", async () => {
+      const p = await h.proposals.create({
+        tenantId: TENANT,
+        actorUserId: ZHANG.userId,
+        kind: "update",
+        objectType: "opportunity",
+        targetId: "opp_1",
+        patch: {},
+        diff: [],
+        reason: "会后",
+        traceId: "t-1",
+      });
+      return { ok: true, output: { proposalId: p.id, status: "pending", diff: [], expiresAt: p.expiresAt }, ms: 2 };
+    });
+  }
+
+  it('0 个提案却声称已生成 → 追加 user 消息、带 toolChoice="required" 追问一次，拿到提案；首次与之后的请求都不带 toolChoice', async () => {
+    const h = setup([{ content: "已生成提案" }, { toolCalls: [PROPOSE] }, { content: "好了" }]);
+    proposeOk(h);
+    const r = await h.agent.run(input("/会后 今天和华东精密开会，对方要求周三前出报价"));
+    expect(h.provider.requests.map((q) => q.toolChoice)).toEqual([undefined, "required", undefined]);
+    expect(h.provider.requests[1]!.messages.slice(-2)).toEqual([{ role: "assistant", content: "已生成提案" }, FOLLOW_UP]);
+    expect(h.provider.requests[1]!.tools?.map((t) => t.name)).toEqual(h.provider.requests[0]!.tools?.map((t) => t.name));
+    expect(r).toMatchObject({ stoppedBy: "final", steps: 3, reply: "好了" });
+    expect(r.proposals.map((p) => p.targetId)).toEqual(["opp_1"]);
+  });
+
+  it("追问后仍没有提案 → 如实回复「这次没有生成提案」，而且只追问一次", async () => {
+    const h = setup([{ content: "已记录会议要点" }, { content: "已更新" }]);
+    const r = await h.agent.run(input("/会后 今天和华东精密开会"));
+    expect(h.provider.requests.map((q) => q.toolChoice)).toEqual([undefined, "required"]);
+    expect(r).toMatchObject({ stoppedBy: "final", steps: 2, proposals: [] });
+    expect(r.reply).toContain("这次没有生成提案");
+  });
+
+  it("四个触发词（提案 / 已更新 / 已生成 / 已记录）都会触发追问", async () => {
+    for (const word of ["提案", "已更新", "已生成", "已记录"]) {
+      const h = setup([{ content: `好的，${word}` }, { content: "没有要写的" }]);
+      await h.agent.run(input("/会后 开完会了"));
+      expect(h.provider.requests.map((q) => q.toolChoice), word).toEqual([undefined, "required"]);
+    }
+  });
+
+  it("写入工具调用失败不算提案：失败后仍声称已生成提案 → 照样追问", async () => {
+    const h = setup([{ toolCalls: [PROPOSE] }, { content: "已生成提案" }, { content: "好" }]);
+    h.tools.handlers.set("propose_update", () => ({ ok: false, error: { code: ErrorCode.PERMISSION_DENIED, message: "无权限访问该记录" }, ms: 1 }));
+    const r = await h.agent.run(input("/会后 开完会了"));
+    expect(h.provider.requests.map((q) => q.toolChoice)).toEqual([undefined, undefined, "required"]);
+    expect(r).toMatchObject({ stoppedBy: "final", steps: 3, proposals: [] });
+    expect(r.reply).toContain("这次没有生成提案");
+  });
+
+  it("不追问：回复没有触发词、技能不含 propose_*、或本轮已有提案", async () => {
+    const a = setup([{ content: "今天没有要改的" }]);
+    const ra = await a.agent.run(input("/会后 只是寒暄"));
+    expect(a.provider.requests.map((q) => q.toolChoice)).toEqual([undefined]);
+    expect(ra).toMatchObject({ stoppedBy: "final", steps: 1, reply: "今天没有要改的" });
+
+    const b = setup([{ content: "已生成晨报" }]);
+    const rb = await b.agent.run(input("/晨报"));
+    expect(b.provider.requests).toHaveLength(1);
+    expect(rb).toMatchObject({ stoppedBy: "final", steps: 1, reply: "已生成晨报" });
+
+    const c = setup([{ toolCalls: [PROPOSE] }, { content: "已生成提案" }]);
+    proposeOk(c);
+    const rc = await c.agent.run(input("/会后 开完会了"));
+    expect(c.provider.requests.map((q) => q.toolChoice)).toEqual([undefined, undefined]);
+    expect(rc).toMatchObject({ stoppedBy: "final", steps: 2, reply: "已生成提案" });
+    expect(rc.proposals).toHaveLength(1);
+  });
+
+  it("追问计入 maxSteps：步数用完就不追问，stoppedBy=max_steps", async () => {
+    const h = setup([{ content: "已生成提案" }, { content: "不应到达" }], { limits: { maxSteps: 1 } });
+    const r = await h.agent.run(input("/会后 开完会了"));
+    expect(h.provider.requests).toHaveLength(1);
+    expect(r).toMatchObject({ stoppedBy: "max_steps", steps: 1 });
+    expect(r.reply).toContain("步数上限");
+  });
+});

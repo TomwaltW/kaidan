@@ -110,6 +110,35 @@ describe("OpenAI 兼容 provider：请求体", () => {
   });
 });
 
+describe("OpenAI 兼容 provider：tool_choice（第 3 轮 R3）", () => {
+  it("toolChoice {name} → 请求体 tool_choice 深等于 {type:\"function\",function:{name}}，其余字段与不带时逐字相同", async () => {
+    const { fn, calls } = fakeFetch(() => json({ choices: [{ message: { content: "好" }, finish_reason: "stop" }] }));
+    const p = openAICompatibleProvider(LLM, { fetchImpl: fn, env: ENV });
+    await p.chat(REQ);
+    await p.chat({ ...REQ, toolChoice: { name: "propose_update" } });
+    expect(calls[0]!.body).not.toHaveProperty("tool_choice");
+    expect(calls[1]!.body).toEqual({ ...calls[0]!.body, tool_choice: { type: "function", function: { name: "propose_update" } } });
+  });
+
+  it('toolChoice "required" / "auto" / "none" 原样下发为 tool_choice', async () => {
+    const { fn, calls } = fakeFetch(() => json({ choices: [{ message: { content: "好" }, finish_reason: "stop" }] }));
+    const p = openAICompatibleProvider(LLM, { fetchImpl: fn, env: ENV });
+    for (const toolChoice of ["required", "auto", "none"] as const) await p.chat({ ...REQ, toolChoice });
+    expect(calls.map((c) => c.body["tool_choice"])).toEqual(["required", "auto", "none"]);
+  });
+
+  it("tools 为空或缺省时不下发 tool_choice（也不下发 tools）", async () => {
+    const { fn, calls } = fakeFetch(() => json({ choices: [{ message: { content: "好" }, finish_reason: "stop" }] }));
+    const p = openAICompatibleProvider(LLM, { fetchImpl: fn, env: ENV });
+    const messages: LlmRequest["messages"] = [{ role: "user", content: "hi" }];
+    await p.chat({ messages, toolChoice: "required" });
+    await p.chat({ messages, tools: [], toolChoice: { name: "propose_update" } });
+    for (const c of calls) {
+      expect(c.body).toEqual({ model: "qwen-plus", messages: [{ role: "user", content: "hi" }], temperature: 0.2, max_tokens: 1024 });
+    }
+  });
+});
+
 describe("OpenAI 兼容 provider：响应映射", () => {
   it("tool_calls → toolCalls，usage → inputTokens/outputTokens，finish_reason=tool_calls", async () => {
     const { fn } = fakeFetch(() =>

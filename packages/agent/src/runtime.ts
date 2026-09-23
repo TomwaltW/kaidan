@@ -26,6 +26,14 @@ export const DEFAULT_LIMITS: AgentLimits = { maxSteps: 8, maxToolCalls: 12, maxI
 
 const PROPOSE_TOOLS = new Set(["propose_update", "propose_create"]);
 
+// 补救追问（dev-spec-2026-09-23 §2 R3）：技能允许 propose_*、本轮以 final 结束、0 个提案、回复却声称已生成 / 已更新 →
+// 追加一条 user 消息，带 FOLLOW_UP_TOOL_CHOICE 再要一步；最多一次，计入 maxSteps。
+/** 追问那一步的 tool_choice（2026-09-23 用户选定 "required"；百炼是否支持待真密钥核实，不支持时只改这一个常量） */
+const FOLLOW_UP_TOOL_CHOICE = "required" as const;
+const FOLLOW_UP_TRIGGER = /提案|已更新|已生成|已记录/;
+const FOLLOW_UP_PROMPT = "你还没有调用写入工具，现在只输出工具调用";
+const NO_PROPOSAL_REPLY = "这次没有生成提案。";
+
 export const createAgentRuntime: CreateAgentRuntime = (deps: AgentDeps): AgentRuntime => {
   const limits: AgentLimits = { ...DEFAULT_LIMITS, ...definedOnly(deps.limits ?? {}) };
   const clock = deps.clock ?? (() => new Date());
@@ -77,8 +85,10 @@ export const createAgentRuntime: CreateAgentRuntime = (deps: AgentDeps): AgentRu
 
     await audit(actor, traceId, "skill_invoked", { skill: skill.name, channel: input.channel });
 
-    const allowed = new Set<string>(skill.allowedTools);
     const tools = toolSpecs(skill);
+    const canPropose = skill.allowedTools.some((t) => PROPOSE_TOOLS.has(t));
+    let followedUp = false;
+    let toolChoice: typeof FOLLOW_UP_TOOL_CHOICE | undefined;
     const messages: LlmMessage[] = [
       { role: "system", content: systemPrompt(skill, actor) },
       { role: "user", content: text || skill.name },
@@ -95,11 +105,16 @@ export const createAgentRuntime: CreateAgentRuntime = (deps: AgentDeps): AgentRu
 
       let res;
       try {
-        res = await deps.provider.chat({ messages: [...messages], ...(tools.length ? { tools } : {}) });
+        res = await deps.provider.chat({
+          messages: [...messages],
+          ...(tools.length ? { tools } : {}),
+          ...(tools.length && toolChoice ? { toolChoice } : {}),
+        });
       } catch (e) {
         return finish("error", friendlyProviderError(e));
       }
       steps++;
+      toolChoice = undefined;
       usage.inputTokens += res.usage.inputTokens;
       usage.outputTokens += res.usage.outputTokens;
       await audit(actor, traceId, "llm_call", {
@@ -113,17 +128,27 @@ export const createAgentRuntime: CreateAgentRuntime = (deps: AgentDeps): AgentRu
       messages.push(msg);
       lastContent = msg.content ?? "";
       const calls = msg.toolCalls ?? [];
-      if (calls.length === 0) return finish("final", lastContent);
+      if (calls.length === 0) {
+        if (!followedUp && canPropose && proposalIds.length === 0 && FOLLOW_UP_TRIGGER.test(lastContent)) {
+          followedUp = true;
+          toolChoice = FOLLOW_UP_TOOL_CHOICE;
+          messages.push({ role: "user", content: FOLLOW_UP_PROMPT });
+          continue;
+        }
+        if (followedUp && proposalIds.length === 0) return finish("final", NO_PROPOSAL_REPLY);
+        return finish("final", lastContent);
+      }
 
       for (const call of calls) {
         if (toolCalls.length >= limits.maxToolCalls) {
           return finish("budget", withNote(lastContent, `本次对话的工具调用次数已达上限（${limits.maxToolCalls} 次），已停止。请缩小问题范围后重试。`));
         }
-        const result = await invokeTool(call.name, call.arguments, allowed, {
+        const result = await invokeTool(call.name, call.arguments, {
           actor,
           traceId,
           now: clock(),
           skill: skill.name,
+          allowedTools: skill.allowedTools,
         });
         toolCalls.push({
           name: call.name,
@@ -140,24 +165,14 @@ export const createAgentRuntime: CreateAgentRuntime = (deps: AgentDeps): AgentRu
     }
   }
 
-  /** 技能不允许的工具 / 参数不是 JSON → 直接给模型 VALIDATION 工具消息（不进 registry，因为 registry 不知道技能边界） */
+  /** 技能边界（ctx.allowedTools）与参数解析都交给 registry（第 3 轮 R1）：模型给的原始参数字符串原样交过去，被拒的调用也由 registry 写 tool_call 审计 */
   async function invokeTool(
     name: string,
     rawArgs: string,
-    allowed: Set<string>,
     ctx: Parameters<AgentDeps["tools"]["invoke"]>[0],
   ): Promise<ToolInvokeResult> {
-    if (!allowed.has(name)) {
-      return { ok: false, error: { code: ErrorCode.VALIDATION, message: `当前技能不允许调用工具 ${name}` }, ms: 0 };
-    }
-    let args: unknown;
     try {
-      args = rawArgs.trim() === "" ? {} : JSON.parse(rawArgs);
-    } catch {
-      return { ok: false, error: { code: ErrorCode.VALIDATION, message: `工具 ${name} 的参数不是合法 JSON` }, ms: 0 };
-    }
-    try {
-      return await deps.tools.invoke(ctx, name, args);
+      return await deps.tools.invoke(ctx, name, rawArgs);
     } catch (e) {
       // 契约规定 invoke 永不抛出；这里兜底，避免单个工具拖垮整次运行
       const code = isKaidanError(e) ? e.code : ErrorCode.UPSTREAM;
