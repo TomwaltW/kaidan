@@ -66,7 +66,7 @@ describe("输入校验：8 个工具都返回 VALIDATION", () => {
     ["propose_update", { ref: { type: "opportunity", id: "opp_1" }, patch: { nextStep: "x" }, reason: "" }],
     ["propose_create", { objectType: "task", data: { title: "x" } }],
     ["calendar_today", { date: "9月21日" }],
-    ["schema_inspect", "不是对象"],
+    ["schema_inspect", 42], // 第 3 轮起字符串参数先按 JSON 解析（见 round3.test.ts），这里用非对象的数字留住 zod 这条路
   ];
   for (const [name, input] of bad) {
     it(`${name} 参数不合法 → VALIDATION`, async () => {

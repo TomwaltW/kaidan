@@ -45,9 +45,23 @@ export const createToolRegistry: CreateToolRegistry = (deps) => {
   }
 
   async function run(ctx: ToolContext, name: string, rawInput: unknown): Promise<unknown> {
+    // 技能边界（第 3 轮 R1）：先于「未知工具」检查，技能外的未知工具名得到的也是这句文案（与第 2 轮 agent 侧逐字一致）；
+    // ctx.allowedTools 不存在（MCP）= 不限技能边界
+    if (ctx.allowedTools && !ctx.allowedTools.includes(name as ToolName)) {
+      throw new KaidanError(ErrorCode.VALIDATION, `当前技能不允许调用工具 ${name}`);
+    }
     const tool = ToolName.safeParse(name).success ? byName.get(name) : undefined;
     if (!tool) throw new KaidanError(ErrorCode.VALIDATION, `未知工具：${name}`);
-    const parsed = tool.input.safeParse(rawInput ?? {});
+    // 模型给的原始参数串由 registry 解析（第 3 轮 R1）：空串 / 纯空白视为 {}；非字符串照旧直接交给 zod
+    let input = rawInput;
+    if (typeof rawInput === "string") {
+      try {
+        input = rawInput.trim() === "" ? {} : JSON.parse(rawInput);
+      } catch {
+        throw new KaidanError(ErrorCode.VALIDATION, `工具 ${name} 的参数不是合法 JSON`);
+      }
+    }
+    const parsed = tool.input.safeParse(input ?? {});
     if (!parsed.success) {
       throw new KaidanError(ErrorCode.VALIDATION, `工具 ${name} 的参数不合法：${summarizeIssues(parsed.error.issues)}`);
     }
