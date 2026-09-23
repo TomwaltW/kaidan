@@ -1,6 +1,6 @@
 // spec 第 6 节 T2 行②：脚本 provider 行为（spec 3.2 第 6 条）。
 import { describe, expect, it } from "vitest";
-import { ErrorCode, isKaidanError, type LlmRequest } from "@kaidan/contracts";
+import { ErrorCode, isKaidanError, type LlmRequest, type LlmToolChoice } from "@kaidan/contracts";
 import { createScriptedProvider } from "../src/index.js";
 
 const req = (text: string): LlmRequest => ({ messages: [{ role: "user", content: text }] });
@@ -65,6 +65,17 @@ describe("createScriptedProvider", () => {
       tools: [{ name: "crm_get", description: "d", parameters: { type: "object" } }],
       temperature: 0.2,
     });
+  });
+
+  it("requests 也记录 toolChoice：字符串原样，{name} 深拷贝（之后改原请求不影响记录）", async () => {
+    const p = createScriptedProvider([{ content: "1" }, { content: "2" }, { content: "3" }]);
+    const named: LlmToolChoice = { name: "propose_update" };
+    await p.chat({ ...req("a"), toolChoice: named });
+    (named as { name: string }).name = "propose_create";
+    await p.chat({ ...req("b"), toolChoice: "required" });
+    await p.chat(req("c"));
+    expect(p.requests.map((r) => r.toolChoice)).toEqual([{ name: "propose_update" }, "required", undefined]);
+    expect("toolChoice" in p.requests[2]!).toBe(false);
   });
 
   it("修改传入的 steps 数组不影响已创建的 provider", async () => {

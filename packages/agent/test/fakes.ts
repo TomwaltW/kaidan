@@ -46,7 +46,15 @@ const INPUTS: Record<ToolName, z.ZodType> = {
 
 export type Handler = (ctx: ToolContext, input: unknown) => ToolInvokeResult | Promise<ToolInvokeResult>;
 
-/** 按 ToolName 顺序列出 8 个工具；invoke 记录调用并交给可替换的 handler */
+/**
+ * 按 ToolName 顺序列出 8 个工具；invoke 记录调用并交给可替换的 handler。
+ * invoke 按第 3 轮冻结契约（docs/dev-spec-2026-09-23.md §2 R1）建模 T1 的 registry 语义，免得 agent 对着一个什么都放行的替身变绿：
+ * ① 每次调用都记进 calls（input = 收到的原样 rawInput，被拒的也记）；
+ * ② ctx.allowedTools 存在且不含 name → VALIDATION「当前技能不允许调用工具 {name}」，这一判断先于未知工具判断；
+ * ③ rawInput 是字符串时由这里 JSON 解析（空串视为 {}），失败 → VALIDATION「工具 {name} 的参数不是合法 JSON」；
+ * ④ 解析后的参数交给 handler，或原样回显。被拒的两种情况 ms 恒为 1（第 2 轮 agent 自己拦截时是 0，测试据此分辨结果出自哪一侧）。
+ * 真 registry 还会为每次调用写 tool_call 审计；这里不写（FakeAudit 只收 agent 自己的审计），那一半由 b7 R1a–R1c 在合流后验。
+ */
 export class FakeRegistry implements ToolRegistry {
   readonly calls: { ctx: ToolContext; name: string; input: unknown }[] = [];
   readonly handlers = new Map<string, Handler>();
@@ -67,12 +75,23 @@ export class FakeRegistry implements ToolRegistry {
   }
   async invoke(ctx: ToolContext, name: string, rawInput: unknown): Promise<ToolInvokeResult> {
     this.calls.push({ ctx, name, input: rawInput });
+    if (ctx.allowedTools && !(ctx.allowedTools as readonly string[]).includes(name)) {
+      return { ok: false, error: { code: ErrorCode.VALIDATION, message: `当前技能不允许调用工具 ${name}` }, ms: 1 };
+    }
+    let input: unknown = rawInput;
+    if (typeof rawInput === "string") {
+      try {
+        input = rawInput.trim() === "" ? {} : JSON.parse(rawInput);
+      } catch {
+        return { ok: false, error: { code: ErrorCode.VALIDATION, message: `工具 ${name} 的参数不是合法 JSON` }, ms: 1 };
+      }
+    }
     const h = this.handlers.get(name);
-    if (h) return h(ctx, rawInput);
+    if (h) return h(ctx, input);
     if (!this.get(name as ToolName)) {
       return { ok: false, error: { code: ErrorCode.VALIDATION, message: `未知工具 ${name}` }, ms: 0 };
     }
-    return { ok: true, output: { echo: rawInput }, ms: 1 };
+    return { ok: true, output: { echo: input }, ms: 1 };
   }
 }
 
