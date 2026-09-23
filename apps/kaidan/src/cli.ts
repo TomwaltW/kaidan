@@ -90,10 +90,15 @@ async function main(argv: string[]): Promise<number> {
 
 // ---------------------------------------------------------------- doctor
 
+/** 第 3 轮 R5：缺备案号只告警、退出码不变。只许写 stderr —— 离线那 6 行 stdout 是逐行验收项，多一行就打红 */
+const FILING_NO_WARNING = "警告：llm.disclosure.filingNo 未填写，试点上线前必须填备案号（界面公示用）";
+
 async function doctor(configArg: string, online: boolean): Promise<number> {
   log(`[doctor] 读取配置：${userPath(configArg)}`);
   const config = await readConfig(configArg);
   log("[doctor] 配置有效，加载组件（不调用模型、不连飞书）…");
+  // 放在组装之前：只看配置本身，组装失败也不影响这一条
+  if (config.llm.kind === "openai_compatible" && !config.llm.disclosure.filingNo) log(FILING_NO_WARNING);
   const app = await buildApp(config);
   try {
     const skills = app.agent.skills();
